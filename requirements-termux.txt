@@ -1,0 +1,4 @@
+# Minimal dependencies for Android Termux (aarch64) execution
+pyyaml>=6.0
+python-dotenv>=1.0
+pytest>=8.2

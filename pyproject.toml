@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pocket-genie"
+version = "0.2.0"
+description = "Quantization-aware multi-agent runtime with hierarchical specialist delegation, 9-stage middleware guardrails, and mobile HITL console."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "numpy; platform_machine != 'aarch64'",
+    "torch>=2.3; platform_machine != 'aarch64'",
+    "transformers>=4.45; platform_machine != 'aarch64'",
+    "lm-format-enforcer>=0.10; platform_machine != 'aarch64'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+genie = "pocket_genie.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pocket_genie = ["skills/*.md", "prompts/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
