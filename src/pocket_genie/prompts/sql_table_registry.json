@@ -1,0 +1,21 @@
+{
+  "tables": {
+    "ablation_results": {
+      "description": "Quantization recipe metrics across E0, E1, E2, E2a, E2b, E4, and E4s.",
+      "columns": ["recipe_id", "avg_bits_linear", "footprint_mb", "wikitext2_ppl", "mode", "json_valid_rate", "values_exact_rate"]
+    },
+    "failure_taxonomy": {
+      "description": "Per-scenario tool-call failure breakdown (pc, iot, bfcl_simple, bfcl_multiple).",
+      "columns": ["recipe_id", "mode", "scenario", "total", "exact", "corrupted_json", "wrong_tool", "invalid_schema", "value_mismatch"]
+    },
+    "layer_telemetry": {
+      "description": "Per-layer activation kurtosis and peak magnitude across 168 linear projections.",
+      "columns": ["layer_idx", "projection", "kurtosis_all", "kurtosis_no_bos", "max_abs_all", "max_abs_no_bos", "outlier_ratio"]
+    },
+    "session_events": {
+      "description": "Telemetry and tool execution log for active and historical agent sessions.",
+      "columns": ["session_id", "turn_idx", "specialist", "tier", "profile", "effective_act_bits", "kv_saved_mb"]
+    }
+  },
+  "scoped_demo_allowlist": ["ablation_results", "failure_taxonomy", "layer_telemetry"]
+}
