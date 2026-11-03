@@ -1,12 +1,11 @@
 # pocket-genie
 
-Edge agent runtime for macOS and Android Termux with hybrid workspace retrieval.
+Quantization-aware edge agent runtime for macOS and Android Termux.
 
-## Modules
-- `registry/`: Decorator tool registry & YAML skill loader
-- `middlewares/`: 8-stage guardrail & summarization pipeline
-- `retrieval/`: Alpha-blended BM25 + dense vector store with cross-feature reranking
-- `quant/`: *(pending: SmoothQuant scale search & JSON schema parser)*
+## Current Stack
+- `registry/` & `middlewares/`: Tool registry, skills, and guardrail chain
+- `retrieval/`: Alpha-blended BM25 + dense workspace store
+- `quant/`: SmoothQuant scale migration, fake-quant hooks, and FSM JSON schema parser
 
 ```bash
 pip install -e .
