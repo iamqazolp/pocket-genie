@@ -11,6 +11,7 @@ from pocket_genie.middlewares.base import (
 from pocket_genie.prompts.supervisor_prompt import load_sql_table_registry
 
 _SQL_TABLE_RE = re.compile(r"\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)", re.IGNORECASE)
+_SQL_CTE_RE = re.compile(r"\b(?:WITH|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+AS\s*\(", re.IGNORECASE)
 _FORBIDDEN_SQL_RE = re.compile(
     r"\b(?:DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|ATTACH|DETACH)\b",
     re.IGNORECASE,
@@ -80,8 +81,9 @@ class SQLTableAllowlistMiddleware(BaseMiddleware):
             )
         )
         referenced = {m.group(1).lower() for m in _SQL_TABLE_RE.finditer(query)}
+        cte_names = {m.group(1).lower() for m in _SQL_CTE_RE.finditer(query)}
         allowed_lower = {t.lower() for t in allowed}
-        disallowed = sorted(referenced - allowed_lower)
+        disallowed = sorted((referenced - cte_names) - allowed_lower)
         if disallowed:
             event = {
                 "middleware": self.name,
