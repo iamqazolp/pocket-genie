@@ -1,12 +1,12 @@
 # pocket-genie
 
-Edge agent runtime for macOS and Android Termux with a composable middleware chain.
+Edge agent runtime for macOS and Android Termux.
 
-## Roadmap
-- [x] Decorator tool registry & YAML skill loader
-- [x] HITL gate, SQL CTE allowlist, refusal detection, rolling summary
-- [ ] Sequential markdown/code chunker & lexical BM25 index
-- [ ] Hybrid dense + lexical workspace store
+## Modules
+- `registry/`: Decorator tool registry & YAML skill loader
+- `middlewares/`: HITL gate, SQL CTE allowlist, refusal detection, rolling summary
+- `retrieval/`: Sequential markdown/code chunker & BM25 lexical index
+- `quant/`: *(pending: SmoothQuant & mixed-precision activation hooks)*
 
 ```bash
 pip install -e .
