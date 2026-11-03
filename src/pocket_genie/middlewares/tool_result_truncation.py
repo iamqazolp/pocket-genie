@@ -15,11 +15,21 @@ def truncate_tool_output(text: str, max_tokens: int = 512) -> tuple[str, bool]:
     max_chars = max(64, max_tokens * 4)
     head_chars = int(max_chars * 0.7)
     tail_chars = max(16, max_chars - head_chars)
-    omitted_chars = max(0, len(text) - (head_chars + tail_chars))
+    head_part = text[:head_chars]
+    tail_part = text[-tail_chars:]
+    if "\n" in head_part:
+        last_nl = head_part.rfind("\n")
+        if last_nl >= head_chars // 2:
+            head_part = head_part[:last_nl]
+    if "\n" in tail_part:
+        first_nl = tail_part.find("\n")
+        if 0 <= first_nl <= len(tail_part) // 2:
+            tail_part = tail_part[first_nl + 1 :]
+    omitted_chars = max(0, len(text) - (len(head_part) + len(tail_part)))
     truncated = (
-        f"{text[:head_chars]}\n"
+        f"{head_part}\n"
         f"... [TRUNCATED: {omitted_chars} chars omitted to fit {max_tokens}-token budget] ...\n"
-        f"{text[-tail_chars:]}"
+        f"{tail_part}"
     )
     return truncated, True
 

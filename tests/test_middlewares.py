@@ -192,3 +192,30 @@ def test_summarization_and_dynamic_prompt_middlewares():
     assert len(ctx.tools) == 0
     assert ctx.messages[0].role == "system"
     assert "2026-11-03T10:00:00Z" in ctx.messages[0].content
+
+
+def test_sql_allowlist_permits_cte_aliases_and_truncation_snaps_newlines():
+    from pocket_genie.middlewares.tool_result_truncation import truncate_tool_output
+
+    state, shared, writer = _make_context(agent_type="scoped-demo")
+    sql_mw = SQLTableAllowlistMiddleware()
+    cte_query = (
+        "WITH ranked AS (SELECT recipe_id, values_exact_rate FROM ablation_results) "
+        "SELECT * FROM ranked WHERE values_exact_rate > 0.5"
+    )
+    ctx = ToolCallContext(
+        state=state,
+        shared=shared,
+        invocation=ToolInvocation(id="cte1", name="sql.query", arguments={"query": cte_query}),
+        spec=None,
+        specialist="sql_agent",
+        writer=writer,
+    )
+    assert sql_mw.wrap_tool(ctx, lambda c: "rows_ok") == "rows_ok"
+
+    multiline = "\n".join(f"line_{i:03d}: " + ("x" * 20) for i in range(40))
+    trunc, flag = truncate_tool_output(multiline, max_tokens=40)
+    assert flag is True
+    assert "[TRUNCATED:" in trunc
+    assert trunc.splitlines()[-1].startswith("line_")
+
