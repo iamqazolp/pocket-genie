@@ -1,12 +1,11 @@
 # pocket-genie
 
-Quantization-aware edge agent runtime for macOS and Android Termux.
+Quantization-aware multi-agent supervisor for macOS and Android Termux.
 
 ## Architecture
-- `registry/` & `middlewares/`: Tool registry, skills, and guardrail chain
-- `retrieval/`: Alpha-blended BM25 + dense workspace store
-- `quant/`: Kurtosis mixed-precision profiles, logit-margin token router, and BOS-sink INT4 KV cache
-- `core/`: *(in progress: specialist delegation & execution graph)*
+- `core/`: Tiered supervisor, specialist delegation wrappers, and execution graph
+- `quant/`: SmoothQuant, kurtosis mixed-precision profiles, and BOS-sink INT4 KV cache
+- `tools/` & `mcp/`: Workspace SQL, DevOps, Termux device tools, and MCP bridge
 
 ```bash
 pip install -e .
