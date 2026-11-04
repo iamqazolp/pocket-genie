@@ -2,10 +2,11 @@
 
 Quantization-aware edge agent runtime for macOS and Android Termux.
 
-## Current Stack
+## Architecture
 - `registry/` & `middlewares/`: Tool registry, skills, and guardrail chain
 - `retrieval/`: Alpha-blended BM25 + dense workspace store
-- `quant/`: SmoothQuant scale migration, fake-quant hooks, and FSM JSON schema parser
+- `quant/`: Kurtosis mixed-precision profiles, logit-margin token router, and BOS-sink INT4 KV cache
+- `core/`: *(in progress: specialist delegation & execution graph)*
 
 ```bash
 pip install -e .
