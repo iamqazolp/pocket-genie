@@ -1,13 +1,11 @@
 # pocket-genie
 
-Quantization-aware multi-agent supervisor for macOS and Android Termux.
+Quantization-aware multi-agent supervisor with SSE mobile console and `genie` CLI.
 
-## Architecture
-- `core/`: Tiered supervisor, specialist delegation wrappers, and execution graph
-- `quant/`: SmoothQuant, kurtosis mixed-precision profiles, and BOS-sink INT4 KV cache
-- `tools/` & `mcp/`: Workspace SQL, DevOps, Termux device tools, and MCP bridge
-
+## Quick Start
 ```bash
 pip install -e .
+genie serve --host 0.0.0.0 --port 8090
+genie ask --prompt "Check git status"
 pytest -q
 ```
