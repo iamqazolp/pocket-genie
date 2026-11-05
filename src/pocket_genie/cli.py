@@ -20,11 +20,19 @@ def cmd_serve(args: argparse.Namespace) -> int:
     svc = PocketGenieService(workspace_dir=ws)
     if args.mcp_config:
         svc.mcp_bridge.load_config_file(Path(args.mcp_config))
-    server = create_http_server(host=args.host, port=args.port, service=svc)
+    static_dir = Path(args.static_dir).resolve() if args.static_dir else None
+    server = create_http_server(
+        host=args.host,
+        port=args.port,
+        service=svc,
+        static_dir=static_dir,
+        api_only=args.api_only,
+    )
     lan_ip = get_lan_ip()
-    print("Pocket-Genie Edge Command Deck listening on:")
-    print(f"  Local:   http://127.0.0.1:{args.port}")
-    print(f"  Phone:   http://{lan_ip}:{args.port}")
+    print("Pocket-Genie Server listening on:")
+    print(f"  Local UI:     http://127.0.0.1:{args.port}")
+    print(f"  Phone UI:     http://{lan_ip}:{args.port}")
+    print(f"  Headless API: http://{lan_ip}:{args.port}/api/v1/openapi.json")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -125,11 +133,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_srv = sub.add_parser("serve", help="Start the SSE Mobile/Web Command Deck.")
+    p_srv = sub.add_parser("serve", help="Start the headless /api/v1 server and static web client.")
     p_srv.add_argument("--host", type=str, default="0.0.0.0")
     p_srv.add_argument("--port", type=int, default=8090)
     p_srv.add_argument("--workspace-dir", type=str, default=None)
     p_srv.add_argument("--mcp-config", type=str, default=None)
+    p_srv.add_argument("--static-dir", type=str, default=None, help="Custom frontend build directory (e.g. React/Vite dist)")
+    p_srv.add_argument("--api-only", action="store_true", help="Disable static UI serving (headless mode for Flutter/mobile)")
     p_srv.set_defaults(func=cmd_serve)
 
     p_ask = sub.add_parser("ask", help="Execute a multi-agent turn from the CLI.")

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <title>Pocket-Genie</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <div>
+          <div class="brand-title">Pocket-Genie</div>
+          <div class="brand-sub" id="workspace-label">Workspace connected</div>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button class="pill-btn" id="telemetry-btn" onclick="window.ui.toggleDrawer()">
+          <span id="tier-pill-text">W4A8 · 8.0b</span>
+        </button>
+        <button class="icon-btn" title="New Conversation" onclick="window.ui.resetChat()">New</button>
+      </div>
+    </header>
+
+    <main class="chat-container" id="chat-container">
+      <div class="welcome-state" id="welcome-state">
+        <h2>What would you like to inspect or run?</h2>
+        <p class="welcome-sub">
+          Ask anything in plain English or tap a starter task below. The Supervisor automatically routes your request to the right specialist.
+        </p>
+
+        <div class="starter-grid">
+          <button class="starter-card" onclick="window.ui.sendQuick('Check git status and summarize repository state')">
+            <div class="starter-title">Inspect Repository Status</div>
+            <div class="starter-desc">Run git status via the DevOps Specialist and check working tree state.</div>
+          </button>
+
+          <button class="starter-card" onclick="window.ui.sendQuick('Compare quantization recipes from ablation_results table')">
+            <div class="starter-title">Compare Quantization Recipes</div>
+            <div class="starter-desc">Query the SQLite ablation table for footprint and exact-match accuracy.</div>
+          </button>
+
+          <button class="starter-card" onclick="window.ui.sendQuick('Search workspace docs for SmoothQuant and kurtosis')">
+            <div class="starter-title">Search Code &amp; Docs</div>
+            <div class="starter-desc">Run hybrid BM25 + vector retrieval across repository files and playbooks.</div>
+          </button>
+
+          <button class="starter-card" onclick="window.ui.sendQuick('Check system CPU load, disk space, and battery telemetry')">
+            <div class="starter-title">System &amp; Phone Health</div>
+            <div class="starter-desc">Read live CPU load, free disk headroom, and battery telemetry.</div>
+          </button>
+        </div>
+
+        <div class="demo-bar">
+          <span class="demo-label">Test Guardrails:</span>
+          <button class="demo-chip" onclick="window.ui.sendQuick('Send a build status notification to my phone', {fault: 'hitl_patch'})">
+            Inline Approval Gate
+          </button>
+          <button class="demo-chip" onclick="window.ui.sendQuick('Check git status under simulated W4A8 syntax fault', {fault: 'corrupted_json'})">
+            W4A8 &rarr; P_mixed Auto-Recovery
+          </button>
+        </div>
+      </div>
+
+      <div class="messages-list" id="messages-list"></div>
+    </main>
+
+    <footer class="composer-bar">
+      <form class="composer-form" onsubmit="window.ui.handleSubmit(event)">
+        <input
+          type="text"
+          id="chat-input"
+          class="composer-input"
+          placeholder="Ask about your repo, SQL metrics, docs, or device..."
+          autocomplete="off"
+        />
+        <button type="submit" class="send-btn" id="send-btn">Send</button>
+      </form>
+    </footer>
+  </div>
+
+  <div class="drawer-backdrop hidden" id="drawer-backdrop" onclick="window.ui.toggleDrawer()"></div>
+  <aside class="drawer hidden" id="system-drawer">
+    <div class="drawer-header">
+      <h3>Engine Telemetry &amp; Plug-ins</h3>
+      <button class="icon-btn" onclick="window.ui.toggleDrawer()">Close</button>
+    </div>
+
+    <div class="drawer-section">
+      <div class="section-title">Quantization &amp; KV-Cache Runtime</div>
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div class="stat-label">Active Profile</div>
+          <div class="stat-value" id="d-profile">t1 · P_fast</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Effective Act Bits</div>
+          <div class="stat-value" id="d-bits">8.00 bits</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Promoted Tokens</div>
+          <div class="stat-value" id="d-promo">0.0%</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">INT4 KV Saved</div>
+          <div class="stat-value" id="d-kv">0.00 MB</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="drawer-section">
+      <div class="section-title">Active Specialists</div>
+      <div class="tag-list" id="d-specialists"></div>
+    </div>
+
+    <div class="drawer-section">
+      <div class="section-title">Loaded Skill Playbooks</div>
+      <div class="tag-list" id="d-skills"></div>
+    </div>
+
+    <div class="drawer-section">
+      <div class="section-title">Headless API for React / Flutter</div>
+      <div class="api-note">
+        Decoupled REST + SSE endpoints at <code>/api/v1/*</code> with CORS enabled.<br/>
+        OpenAPI 3.1 Spec: <a href="/api/v1/openapi.json" target="_blank">/api/v1/openapi.json</a>
+      </div>
+    </div>
+  </aside>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

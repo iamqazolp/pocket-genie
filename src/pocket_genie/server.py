@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import mimetypes
 import socket
 import urllib.parse
 from http import HTTPStatus
@@ -9,6 +10,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from pocket_genie.api import (
+    build_openapi_spec,
+    build_timeline_steps,
+    format_human_readable_reply,
+)
 from pocket_genie.core import (
     GenieExecutionGraph,
     GenieState,
@@ -33,6 +39,8 @@ from pocket_genie.shared import (
 )
 from pocket_genie.tools import register_all_builtin_tools
 
+DEFAULT_STATIC_DIR = Path(__file__).resolve().parent / "web"
+
 
 def get_lan_ip() -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -46,7 +54,7 @@ def get_lan_ip() -> str:
 
 
 class PocketGenieService:
-    """Stateful multi-agent service powering the SSE mobile console, HITL approval inbox, and CLI."""
+    """Headless multi-agent service powering REST/SSE v1 endpoints for Web, React, Flutter, and CLI clients."""
 
     def __init__(self, workspace_dir: Path | None = None) -> None:
         self.workspace_dir = (workspace_dir or Path.cwd()).resolve()
@@ -174,6 +182,7 @@ class PocketGenieService:
         self.state.agent_type = agent_type
         self.state.target_specialist = target_specialist
         self.state.messages.append(ChatMessage(role="user", content=prompt))
+        prev_hitl_count = len(self.state.pending_hitl)
 
         shared = GenieSharedContext(
             session_id=self.state.session_id,
@@ -209,9 +218,18 @@ class PocketGenieService:
             routed_snap.profile = "P_mixed"
         self.state.quant_telemetry = routed_snap
 
+        new_approval = (
+            self.state.pending_hitl[-1].to_dict()
+            if len(self.state.pending_hitl) > prev_hitl_count
+            else None
+        )
+
         return {
-            "reply": reply.content,
+            "reply": format_human_readable_reply(reply.content),
+            "raw_reply": reply.content,
             "active_tier": self.state.active_tier,
+            "steps": build_timeline_steps(writer.events),
+            "approval_request": new_approval,
             "events": [{"event_type": e.event_type, "data": e.data} for e in writer.events],
             "state": self.get_state_summary(),
         }
@@ -244,258 +262,78 @@ class PocketGenieService:
         }
 
 
-_MOBILE_CONSOLE_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
-<title>Pocket-Genie Edge Command Deck</title>
-<style>
-  :root {
-    --bg: #0b0f17;
-    --panel: #131b2e;
-    --border: #23304d;
-    --text: #e2e8f0;
-    --muted: #94a3b8;
-    --accent: #38bdf8;
-    --ok: #34d399;
-    --warn: #fbbf24;
-    --err: #f87171;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg); color: var(--text); padding: 14px; max-width: 780px; margin-inline: auto;
-  }
-  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-  h1 { font-size: 1.15rem; margin: 0; letter-spacing: -0.02em; }
-  .badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 999px; background: #1e293b; color: var(--accent); border: 1px solid var(--border); }
-  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 12px; }
-  .tab-btn {
-    background: var(--panel); color: var(--muted); border: 1px solid var(--border);
-    padding: 9px 6px; border-radius: 8px; font-size: 0.82rem; font-weight: 600; cursor: pointer;
-  }
-  .tab-btn.active { color: var(--text); border-color: var(--accent); background: #172542; }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-  .chip {
-    background: #1e293b; color: var(--text); border: 1px solid var(--border);
-    border-radius: 6px; padding: 6px 9px; font-size: 0.78rem; cursor: pointer;
-  }
-  textarea, select {
-    width: 100%; background: #090d16; color: var(--text); border: 1px solid var(--border);
-    border-radius: 8px; padding: 9px; font-size: 0.88rem; margin-bottom: 8px;
-  }
-  .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
-  .btn-row { display: flex; gap: 8px; }
-  .btn {
-    flex: 1; padding: 10px; border-radius: 8px; border: none; font-weight: 600;
-    background: var(--accent); color: #090d16; cursor: pointer; font-size: 0.88rem;
-  }
-  .btn.secondary { background: #1e293b; color: var(--text); border: 1px solid var(--border); flex: 0.35; }
-  .hud-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-  .metric { background: #090d16; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
-  .metric .lbl { font-size: 0.72rem; color: var(--muted); }
-  .metric .val { font-size: 1.02rem; font-weight: 700; color: var(--ok); margin-top: 2px; }
-  pre {
-    background: #090d16; border: 1px solid var(--border); border-radius: 8px;
-    padding: 10px; overflow-x: auto; font-size: 0.78rem; white-space: pre-wrap; margin: 6px 0 0;
-  }
-  .hidden { display: none; }
-  .hitl-item { border-left: 3px solid var(--warn); padding-left: 10px; margin-bottom: 10px; }
-</style>
-</head>
-<body>
-<header>
-  <h1>Pocket-Genie Command Deck</h1>
-  <span id="tier-badge" class="badge">t1 · P_fast (W4A8)</span>
-</header>
-
-<div class="tabs">
-  <button class="tab-btn active" onclick="switchTab('stream')">1. Genie Stream</button>
-  <button class="tab-btn" onclick="switchTab('hitl')">2. HITL Inbox (<span id="hitl-count">0</span>)</button>
-  <button class="tab-btn" onclick="switchTab('hud')">3. Quant & MCP HUD</button>
-</div>
-
-<div id="tab-stream">
-  <div class="card">
-    <div class="chips">
-      <button class="chip" onclick="setPreset('Check git_status and summarize repository state', 'supervisor', 'none')">Repo Git Status</button>
-      <button class="chip" onclick="setPreset('SELECT recipe_id, footprint_mb, values_exact_rate FROM ablation_results', 'direct-specialist', 'none', 'sql_agent')">SQL Ablation Query</button>
-      <button class="chip" onclick="setPreset('Search workspace for kurtosis 542.6 and SmoothQuant', 'direct-specialist', 'none', 'knowledge_base_agent')">Hybrid RAG Search</button>
-      <button class="chip" onclick="setPreset('Dispatch build alert notification to phone', 'supervisor', 'hitl_patch')">Trigger Phone HITL Gate</button>
-      <button class="chip" onclick="setPreset('Audit repository under W4A8 JSON syntax fault', 'supervisor', 'corrupted_json')">Simulate W4A8 -> P_mixed Recovery</button>
-    </div>
-    <textarea id="prompt" rows="2" placeholder="Ask Supervisor or Specialist...">Check git_status and summarize repository state</textarea>
-    <div class="controls">
-      <select id="agent_type">
-        <option value="supervisor">Mode: Supervisor (Hierarchical)</option>
-        <option value="scoped-demo">Mode: Scoped Demo (Read-Only)</option>
-        <option value="direct-specialist">Mode: Direct Specialist</option>
-        <option value="red-agent">Mode: Red-Team Fault Agent</option>
-        <option value="run-assistant">Mode: Run Assistant</option>
-      </select>
-      <select id="fault">
-        <option value="none">Fault: None (Clean P_fast)</option>
-        <option value="corrupted_json">Fault: Corrupted JSON (t1 -> t2)</option>
-        <option value="refusal">Fault: Refusal + Corrupt (t1 -> t3)</option>
-        <option value="hitl_patch">Fault: Mutating Tool (HITL Gate)</option>
-      </select>
-    </div>
-    <div class="btn-row">
-      <button class="btn" onclick="runGenie()">Run Turn</button>
-      <button class="btn secondary" onclick="resetSession()">Reset</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <strong>Response & Specialist Observations</strong>
-    <pre id="reply-box">Ready.</pre>
-    <strong style="display:block;margin-top:10px;">Live Event Stream (Reasoning · Chunks · Middlewares)</strong>
-    <pre id="events-box">[]</pre>
-  </div>
-</div>
-
-<div id="tab-hitl" class="hidden">
-  <div class="card">
-    <strong>Pending Human-in-the-Loop Approvals</strong>
-    <div id="hitl-list" style="margin-top:8px;color:var(--muted);">No pending mutating tool requests.</div>
-  </div>
-</div>
-
-<div id="tab-hud" class="hidden">
-  <div class="card">
-    <strong>Quantization & KV-Cache Telemetry</strong>
-    <div class="hud-grid" style="margin-top:8px;">
-      <div class="metric"><div class="lbl">Active Tier / Profile</div><div class="val" id="m-profile">t1 / P_fast</div></div>
-      <div class="metric"><div class="lbl">Effective Act Bits</div><div class="val" id="m-bits">8.00 bits</div></div>
-      <div class="metric"><div class="lbl">Promoted Token Ratio</div><div class="val" id="m-promo">0.0%</div></div>
-      <div class="metric"><div class="lbl">BOS-Sink INT4 KV Saved</div><div class="val" id="m-kv">3.40 MB</div></div>
-    </div>
-    <strong style="display:block;margin-top:12px;">Registered Skills & Specialists</strong>
-    <pre id="hud-box">Loading...</pre>
-  </div>
-</div>
-
-<script>
-let currentSpecialist = null;
-function switchTab(name) {
-  ['stream', 'hitl', 'hud'].forEach((t, i) => {
-    document.getElementById('tab-' + t).classList.toggle('hidden', t !== name);
-    document.querySelectorAll('.tab-btn')[i].classList.toggle('active', t === name);
-  });
-}
-function setPreset(p, mode, fault, spec=null) {
-  document.getElementById('prompt').value = p;
-  document.getElementById('agent_type').value = mode;
-  document.getElementById('fault').value = fault;
-  currentSpecialist = spec;
-}
-function renderState(st) {
-  const q = st.quant_telemetry || {};
-  document.getElementById('tier-badge').textContent = `${st.active_tier} · ${q.profile || 'P_fast'} (${q.effective_act_bits || 8}b)`;
-  document.getElementById('m-profile').textContent = `${st.active_tier} / ${q.profile || 'P_fast'}`;
-  document.getElementById('m-bits').textContent = `${q.effective_act_bits || 8.0} bits`;
-  document.getElementById('m-promo').textContent = `${((q.promoted_token_ratio || 0) * 100).toFixed(1)}%`;
-  document.getElementById('m-kv').textContent = `${q.kv_memory_saved_mb || 0.0} MB`;
-  const pending = (st.pending_hitl || []).filter(h => h.status === 'pending');
-  document.getElementById('hitl-count').textContent = pending.length;
-  const listEl = document.getElementById('hitl-list');
-  if (!pending.length) {
-    listEl.innerHTML = 'No pending mutating tool requests.';
-  } else {
-    listEl.innerHTML = pending.map(h => `
-      <div class="hitl-item">
-        <div><strong>${h.tool_name}</strong> (${h.specialist}, tier=${h.tier})</div>
-        <pre>${JSON.stringify(h.arguments, null, 2)}</pre>
-        <div class="btn-row" style="margin-top:6px;">
-          <button class="btn" onclick="decideHitl('${h.request_id}', true)">Approve & Execute</button>
-          <button class="btn secondary" onclick="decideHitl('${h.request_id}', false)">Reject</button>
-        </div>
-      </div>
-    `).join('');
-  }
-  document.getElementById('hud-box').textContent = JSON.stringify({
-    specialists: st.specialists,
-    skills: st.skills,
-    middleware_trace: st.middleware_trace
-  }, null, 2);
-}
-async function runGenie() {
-  const payload = {
-    prompt: document.getElementById('prompt').value,
-    agent_type: document.getElementById('agent_type').value,
-    target_specialist: currentSpecialist,
-    fault: document.getElementById('fault').value
-  };
-  const r = await fetch('/api/run', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
-  const data = await r.json();
-  document.getElementById('reply-box').textContent = data.reply;
-  document.getElementById('events-box').textContent = JSON.stringify(data.events, null, 2);
-  renderState(data.state);
-}
-async function decideHitl(id, approved) {
-  const r = await fetch('/api/hitl', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({request_id: id, approved})});
-  const data = await r.json();
-  document.getElementById('reply-box').textContent = data.output;
-  renderState(data.state);
-  switchTab('stream');
-}
-async function resetSession() {
-  const r = await fetch('/api/reset', {method: 'POST'});
-  const st = await r.json();
-  document.getElementById('reply-box').textContent = 'Session reset.';
-  document.getElementById('events-box').textContent = '[]';
-  renderState(st);
-}
-fetch('/api/state').then(r => r.json()).then(renderState);
-</script>
-</body>
-</html>
-"""
-
-
 def create_http_server(
     host: str = "0.0.0.0",
     port: int = 8090,
     service: PocketGenieService | None = None,
+    static_dir: Path | None = DEFAULT_STATIC_DIR,
+    api_only: bool = False,
 ) -> ThreadingHTTPServer:
     svc = service or PocketGenieService()
+    web_root = None if api_only else (static_dir or DEFAULT_STATIC_DIR).resolve()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:
             return None
 
+        def _add_cors_headers(self) -> None:
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
         def _send_json(self, payload: dict[str, Any], status: int = HTTPStatus.OK) -> None:
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status)
+            self._add_cors_headers()
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
+        def _serve_static_file(self, rel_path: str) -> bool:
+            if web_root is None or not web_root.exists():
+                return False
+            target = (web_root / rel_path).resolve()
+            if target != web_root and web_root not in target.parents:
+                return False
+            if not target.exists() or not target.is_file():
+                return False
+            mime, _ = mimetypes.guess_type(str(target))
+            content_type = mime or "application/octet-stream"
+            data = target.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self._add_cors_headers()
+            self.send_header("Content-Type", f"{content_type}; charset=utf-8" if content_type.startswith("text/") else content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return True
+
+        def do_OPTIONS(self) -> None:
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self._add_cors_headers()
+            self.end_headers()
+
         def do_GET(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path == "/":
-                body = _MOBILE_CONSOLE_HTML.encode("utf-8")
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+            path = parsed.path
+
+            if path == "/api/v1/openapi.json":
+                self._send_json(build_openapi_spec())
                 return
 
-            if parsed.path == "/api/state":
+            if path in ("/api/v1/status", "/api/state"):
                 self._send_json(svc.get_state_summary())
                 return
 
-            if parsed.path == "/api/stream":
+            if path in ("/api/v1/chat/stream", "/api/stream"):
                 qs = urllib.parse.parse_qs(parsed.query)
-                prompt = qs.get("prompt", ["Check status"])[0]
+                prompt = qs.get("message", qs.get("prompt", ["Check status"]))[0]
                 agent_type = qs.get("agent_type", ["supervisor"])[0]
                 fault = qs.get("fault", ["none"])[0]
 
                 self.send_response(HTTPStatus.OK)
+                self._add_cors_headers()
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
@@ -508,6 +346,11 @@ def create_http_server(
                 svc.run_turn(prompt=prompt, agent_type=agent_type, fault=fault, on_event=_push_sse)  # type: ignore[arg-type]
                 return
 
+            if path == "/" and self._serve_static_file("index.html"):
+                return
+            if path.startswith("/static/") and self._serve_static_file(path[len("/static/") :]):
+                return
+
             self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
         def do_POST(self) -> None:
@@ -515,14 +358,21 @@ def create_http_server(
             raw = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
             body = json.loads(raw or "{}")
 
-            if self.path == "/api/run":
+            if self.path in ("/api/v1/chat", "/api/run"):
+                prompt = str(body.get("message") or body.get("prompt") or "")
                 res = svc.run_turn(
-                    prompt=str(body.get("prompt", "")),
+                    prompt=prompt,
                     agent_type=body.get("agent_type", "supervisor"),
                     target_specialist=body.get("target_specialist"),
                     tier=body.get("tier", "t1"),
                     fault=str(body.get("fault", "none")),
                 )
+                self._send_json(res)
+                return
+
+            if self.path.startswith("/api/v1/approvals/"):
+                req_id = urllib.parse.unquote(self.path[len("/api/v1/approvals/") :])
+                res = svc.resolve_hitl(request_id=req_id, approved=bool(body.get("approved", False)))
                 self._send_json(res)
                 return
 
@@ -534,7 +384,7 @@ def create_http_server(
                 self._send_json(res)
                 return
 
-            if self.path == "/api/reset":
+            if self.path in ("/api/v1/session/reset", "/api/reset"):
                 self._send_json(svc.reset_session())
                 return
 

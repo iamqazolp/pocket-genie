@@ -35,17 +35,70 @@ class ModelBackend(Protocol):
     ) -> GenerationOutput: ...
 
 
+_DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "sql": ("sql", "select", "table", "ablation", "recipe", "e0", "e1", "e2", "e4s", "metric", "compare", "exact", "footprint"),
+    "knowledge_base": ("search", "find", "kurtosis", "smoothquant", "outlier", "doc", "note", "explain", "architecture", "where"),
+    "device": ("battery", "cpu", "disk", "system", "telemetry", "phone", "termux", "notify", "notification", "alert", "clipboard"),
+    "devops": ("git", "status", "diff", "branch", "pytest", "test", "repo", "commit", "file", "patch"),
+}
+
+
+def _select_tool_for_query(query: str, tools: list[dict[str, Any]]) -> dict[str, Any]:
+    q_lower = query.lower()
+    best_fn = tools[0]["function"]
+    best_score = -1
+
+    for t in tools:
+        fn = t["function"]
+        name_lower = fn["name"].lower()
+        desc_lower = fn.get("description", "").lower()
+        score = 0
+
+        for tok in q_lower.replace(".", " ").replace("_", " ").split():
+            if len(tok) >= 3:
+                if tok in name_lower:
+                    score += 4
+                elif tok in desc_lower:
+                    score += 2
+
+        for dom, keywords in _DOMAIN_KEYWORDS.items():
+            if dom in name_lower and any(kw in q_lower for kw in keywords):
+                score += 6
+
+        if ("notify" in q_lower or "alert" in q_lower) and "send_notification" in name_lower:
+            score += 12
+        elif ("clipboard" in q_lower or "copy" in q_lower) and "clipboard_set" in name_lower:
+            score += 12
+        elif ("patch" in q_lower or "write" in q_lower) and "apply_patch" in name_lower:
+            score += 12
+        elif ("diff" in q_lower) and "git_diff" in name_lower:
+            score += 10
+        elif ("pytest" in q_lower or "test" in q_lower) and "run_pytest" in name_lower:
+            score += 10
+        elif ("read" in q_lower or "chunk" in q_lower) and "read_file_chunk" in name_lower:
+            score += 10
+        elif not any(w in q_lower for w in ("notify", "alert", "clipboard", "patch", "write")):
+            if any(m in name_lower for m in ("send_notification", "clipboard_set", "apply_patch", "ack_")):
+                score -= 3
+
+        if score > best_score:
+            best_score = score
+            best_fn = fn
+
+    return best_fn
+
+
 class DeterministicReplayBackend:
-    """Deterministic backend for fast CI verification, Termux offline execution, and fault testing."""
+    """Deterministic backend with intent-aware tool routing for offline Termux, CI, and UI testing."""
 
     def __init__(
         self,
         tier: PrecisionTier = "t1",
-        scripted_responses: list[CallableResponse | GenerationOutput] | None = None,
+        scripted_responses: list[Any] | None = None,
     ) -> None:
         self.name = f"deterministic-{tier}"
         self.tier = tier
-        self._queue: list[ Any ] = list(scripted_responses or [])
+        self._queue: list[Any] = list(scripted_responses or [])
 
     def push_response(self, response: Any) -> None:
         self._queue.append(response)
@@ -57,7 +110,7 @@ class DeterministicReplayBackend:
         constrain_schema: bool = False,
     ) -> GenerationOutput:
         profile_map = {"t1": "P_fast", "t2": "P_mixed", "t3": "P_accurate"}
-        act_bits_map = {"t1": 8.0, "t2": 8.38, "t3": 16.0}
+        act_bits_map = {"t1": 8.0, "t2": 8.24, "t3": 16.0}
         telemetry = QuantTelemetrySnapshot(
             tier=self.tier,
             profile=profile_map[self.tier],  # type: ignore[arg-type]
@@ -86,13 +139,28 @@ class DeterministicReplayBackend:
             "",
         )
         if tools:
-            first_tool = tools[0]["function"]["name"]
+            chosen = _select_tool_for_query(last_user, tools)
+            first_tool = chosen["name"]
             args: dict[str, Any] = {}
-            props = tools[0]["function"].get("parameters", {}).get("properties", {})
-            if "query" in props:
-                args["query"] = last_user or "status"
+            props = chosen.get("parameters", {}).get("properties", {})
+            if "title" in props and "message" in props:
+                args["title"] = "Pocket-Genie Alert"
+                args["message"] = last_user or "Task completed"
+            elif "query" in props:
+                if first_tool == "sql.query_workspace" and not last_user.strip().upper().startswith(("SELECT", "WITH")):
+                    args["query"] = (
+                        "SELECT recipe_id, avg_bits_linear, footprint_mb, json_valid_rate, values_exact_rate "
+                        "FROM ablation_results ORDER BY values_exact_rate DESC"
+                    )
+                else:
+                    args["query"] = last_user or "status"
             elif "task" in props:
                 args["task"] = last_user or "inspect workspace"
+            elif "name" in props:
+                args["name"] = "quant-diagnosis"
+            elif "path" in props:
+                args["path"] = "README.md"
+
             raw_json = json.dumps(args)
             mid = max(1, len(raw_json) // 2)
             chunks = [
@@ -102,7 +170,7 @@ class DeterministicReplayBackend:
             msg = ChatMessage(
                 role="assistant",
                 content="",
-                reasoning=f"Selected `{first_tool}` on tier {self.tier} ({telemetry.profile}).",
+                reasoning=f"Routing to `{first_tool}` on {self.tier} ({telemetry.profile}).",
                 tool_calls=[ToolInvocation(id="call_01", name=first_tool, arguments=args)],
             )
             return GenerationOutput(message=msg, streamed_chunks=chunks, telemetry=telemetry)
@@ -115,9 +183,6 @@ class DeterministicReplayBackend:
             ),
             telemetry=telemetry,
         )
-
-
-CallableResponse = Any
 
 
 class OpenAICompatibleBackend:

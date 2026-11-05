@@ -30,7 +30,7 @@ genie = "pocket_genie.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pocket_genie = ["skills/*.md", "prompts/*.json"]
+pocket_genie = ["skills/*.md", "prompts/*.json", "web/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
