@@ -70,6 +70,11 @@ class ToolSpec:
             },
         }
 
+    def to_langchain_tool(self) -> Any:
+        from pocket_genie.integrations.langchain_bridge import tool_spec_to_structured_tool
+
+        return tool_spec_to_structured_tool(self)
+
 
 class ToolRegistry:
     """Central registry for built-in, plugin, and MCP-bridged tools."""

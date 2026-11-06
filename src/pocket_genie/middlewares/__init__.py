@@ -13,6 +13,7 @@ from pocket_genie.middlewares.base import (
 from pocket_genie.middlewares.dynamic_prompt import DynamicSupervisorPromptMiddleware
 from pocket_genie.middlewares.fallback import FallbackMiddleware
 from pocket_genie.middlewares.human_in_the_loop import HumanInTheLoopMiddleware
+from pocket_genie.middlewares.langfuse_tracing import LangfuseTracingMiddleware
 from pocket_genie.middlewares.message_sanitizer import (
     MessageSanitizerMiddleware,
     sanitize_messages,
@@ -37,6 +38,7 @@ __all__ = [
     "DynamicSupervisorPromptMiddleware",
     "FallbackMiddleware",
     "HumanInTheLoopMiddleware",
+    "LangfuseTracingMiddleware",
     "MessageSanitizerMiddleware",
     "MiddlewarePipeline",
     "ModelCallContext",
