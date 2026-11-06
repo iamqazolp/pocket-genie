@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pocket-genie"
-version = "0.2.0"
-description = "Quantization-aware multi-agent runtime with hierarchical specialist delegation, 9-stage middleware guardrails, and mobile HITL console."
+version = "0.3.0"
+description = "Quantization-aware LangGraph/LangChain multi-agent runtime with Langfuse observability, 9-stage middleware guardrails, and mobile HITL console."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -15,6 +15,10 @@ dependencies = [
     "torch>=2.3; platform_machine != 'aarch64'",
     "transformers>=4.45; platform_machine != 'aarch64'",
     "lm-format-enforcer>=0.10; platform_machine != 'aarch64'",
+    "langchain-core>=0.3; platform_machine != 'aarch64'",
+    "langchain>=0.3; platform_machine != 'aarch64'",
+    "langgraph>=0.2; platform_machine != 'aarch64'",
+    "langfuse>=2.50; platform_machine != 'aarch64'",
 ]
 
 [project.optional-dependencies]
@@ -37,5 +41,8 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.ruff]
-line-length = 100
-target-version = "py311"
+line-length = 105
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

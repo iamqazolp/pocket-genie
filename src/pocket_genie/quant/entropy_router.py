@@ -4,8 +4,7 @@ import dataclasses
 import math
 from typing import Sequence
 
-from pocket_genie.core.state import QuantTelemetrySnapshot
-from pocket_genie.shared import PrecisionProfileName, PrecisionTier
+from pocket_genie.shared import PrecisionProfileName, PrecisionTier, QuantTelemetrySnapshot
 
 
 @dataclasses.dataclass(slots=True)

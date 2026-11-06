@@ -62,18 +62,21 @@ class ChatMessage:
         return payload
 
 
+StreamEventType = Literal[
+    "ai_message_chunk",
+    "tool_message_chunk",
+    "tool_message",
+    "subagent_reasoning",
+    "middleware_event",
+    "quant_telemetry",
+    "hitl_request",
+    "final",
+]
+
+
 @dataclasses.dataclass(slots=True)
 class StreamEvent:
-    event_type: Literal[
-        "ai_message_chunk",
-        "tool_message_chunk",
-        "tool_message",
-        "subagent_reasoning",
-        "middleware_event",
-        "quant_telemetry",
-        "hitl_request",
-        "final",
-    ]
+    event_type: StreamEventType
     data: dict[str, Any]
 
 
@@ -88,12 +91,45 @@ class StreamWriter:
     def events(self) -> list[StreamEvent]:
         return list(self._events)
 
-    def emit(self, event_type: StreamEvent.__annotations__["event_type"], **data: Any) -> StreamEvent:
+    def emit(self, event_type: StreamEventType, **data: Any) -> StreamEvent:
         ev = StreamEvent(event_type=event_type, data=data)
         self._events.append(ev)
         if self._callback is not None:
             self._callback(ev)
         return ev
+
+
+@dataclasses.dataclass(slots=True)
+class QuantTelemetrySnapshot:
+    tier: PrecisionTier = "t1"
+    profile: PrecisionProfileName = "P_fast"
+    weight_bits: float = 4.0
+    effective_act_bits: float = 8.0
+    promoted_tokens: int = 0
+    total_tokens: int = 0
+    min_logit_margin: float = 5.0
+    mean_entropy: float = 0.15
+    prefix_kv_hit: bool = True
+    kv_cache_fp16_mb: float = 0.0
+    kv_cache_quant_mb: float = 0.0
+    weight_footprint_mb: float = 315.1
+    fallback_overhead_mb: float = 0.0
+
+    @property
+    def promoted_token_ratio(self) -> float:
+        if self.total_tokens <= 0:
+            return 0.0
+        return self.promoted_tokens / float(self.total_tokens)
+
+    @property
+    def kv_memory_saved_mb(self) -> float:
+        return max(0.0, self.kv_cache_fp16_mb - self.kv_cache_quant_mb)
+
+    def to_dict(self) -> dict[str, Any]:
+        d = dataclasses.asdict(self)
+        d["promoted_token_ratio"] = round(self.promoted_token_ratio, 4)
+        d["kv_memory_saved_mb"] = round(self.kv_memory_saved_mb, 3)
+        return d
 
 
 @dataclasses.dataclass(slots=True)
