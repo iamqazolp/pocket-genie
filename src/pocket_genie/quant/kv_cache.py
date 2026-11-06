@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-from typing import Sequence
+from typing import Any, Sequence
+
+try:
+    import torch
+except ImportError:
+    torch = None  # type: ignore[assignment]
 
 
 @dataclasses.dataclass(slots=True)
@@ -21,8 +26,20 @@ class KVCompressionStats:
         return max(0.0, round(self.fp16_mb - self.compressed_mb, 4))
 
 
-def quantize_k_per_channel_int4(matrix: Sequence[Sequence[float]]) -> tuple[list[list[float]], float]:
+def quantize_k_per_channel_int4(matrix: Sequence[Sequence[float]] | Any) -> tuple[list[list[float]], float]:
     """Per-channel asymmetric INT4 quantization across sequence dimension for Keys (K)."""
+    if torch is not None and isinstance(matrix, torch.Tensor):
+        if matrix.numel() == 0:
+            return [], 0.0
+        mat_fp = matrix.detach().float()
+        cmin = mat_fp.amin(dim=0, keepdim=True)
+        cmax = mat_fp.amax(dim=0, keepdim=True)
+        scale = (cmax - cmin).clamp(min=1e-6) / 15.0
+        q = torch.round((mat_fp - cmin) / scale).clamp(0, 15)
+        deq = cmin + q * scale
+        mse = float((mat_fp - deq).pow(2).mean().item())
+        return deq.tolist(), round(mse, 6)
+
     if not matrix or not matrix[0]:
         return [], 0.0
     seq_len = len(matrix)
@@ -47,8 +64,20 @@ def quantize_k_per_channel_int4(matrix: Sequence[Sequence[float]]) -> tuple[list
     return reconstructed, round(mse, 6)
 
 
-def quantize_v_per_token_int4(matrix: Sequence[Sequence[float]]) -> tuple[list[list[float]], float]:
+def quantize_v_per_token_int4(matrix: Sequence[Sequence[float]] | Any) -> tuple[list[list[float]], float]:
     """Per-token asymmetric INT4 quantization across head dimension for Values (V)."""
+    if torch is not None and isinstance(matrix, torch.Tensor):
+        if matrix.numel() == 0:
+            return [], 0.0
+        mat_fp = matrix.detach().float()
+        rmin = mat_fp.amin(dim=-1, keepdim=True)
+        rmax = mat_fp.amax(dim=-1, keepdim=True)
+        scale = (rmax - rmin).clamp(min=1e-6) / 15.0
+        q = torch.round((mat_fp - rmin) / scale).clamp(0, 15)
+        deq = rmin + q * scale
+        mse = float((mat_fp - deq).pow(2).mean().item())
+        return deq.tolist(), round(mse, 6)
+
     if not matrix or not matrix[0]:
         return [], 0.0
     seq_len = len(matrix)

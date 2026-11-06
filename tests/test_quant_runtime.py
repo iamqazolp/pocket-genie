@@ -72,3 +72,57 @@ def test_build_tool_call_schema_anyof():
     )
     assert "anyOf" in schema
     assert len(schema["anyOf"]) == 2
+
+
+def test_pytorch_smoothquant_and_selective_layer_hooks():
+    import pytest
+
+    torch = pytest.importorskip("torch")
+    import torch.nn as nn
+    from pocket_genie.quant import (
+        attach_per_layer_activation_hooks,
+        migrate_swiglu_down_proj_scale,
+        quantize_k_per_channel_int4,
+        quantize_v_per_token_int4,
+    )
+
+    class ToyMLP(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.up_proj = nn.Linear(8, 8, bias=False)
+            self.down_proj = nn.Linear(8, 8, bias=False)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return self.down_proj(self.up_proj(x))
+
+    mlp = ToyMLP()
+    x = torch.randn(4, 8)
+    x[:, 0] *= 25.0
+    with torch.no_grad():
+        baseline = mlp(x).clone()
+        act_max = mlp.up_proj(x).abs().amax(dim=0)
+
+    alpha = migrate_swiglu_down_proj_scale(mlp.up_proj, mlp.down_proj, act_max, alpha=None)
+    assert 0.30 <= alpha <= 0.85
+    with torch.no_grad():
+        after_smooth = mlp(x)
+    assert torch.allclose(baseline, after_smooth, atol=1e-4)
+
+    handles = attach_per_layer_activation_hooks(
+        mlp,
+        layer_act_bits={"down_proj": 16},
+        default_bits=8,
+    )
+    assert len(handles) == 2
+    out_quant = mlp(x)
+    assert out_quant.shape == baseline.shape
+    for h in handles:
+        h.remove()
+
+    k_tensor = torch.randn(12, 8)
+    k_deq, k_mse = quantize_k_per_channel_int4(k_tensor)
+    v_deq, v_mse = quantize_v_per_token_int4(k_tensor)
+    assert len(k_deq) == 12
+    assert len(v_deq) == 12
+    assert k_mse >= 0.0 and v_mse >= 0.0
+
