@@ -52,9 +52,14 @@ class GenieChatScreen extends StatefulWidget {
   State<GenieChatScreen> createState() => _GenieChatScreenState();
 }
 
+const String _kDefaultGenieApiUrl = String.fromEnvironment(
+  'GENIE_API_URL',
+  defaultValue: 'http://127.0.0.1:8090',
+);
+
 class _GenieChatScreenState extends State<GenieChatScreen> {
   final GenieApiClient _api = GenieApiClient(
-    baseUrl: 'http://127.0.0.1:8090',
+    baseUrl: _kDefaultGenieApiUrl,
   );
   final TextEditingController _inputCtrl = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();

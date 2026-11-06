@@ -7,7 +7,10 @@ class GenieApiClient {
   final http.Client _http;
 
   GenieApiClient({
-    this.baseUrl = 'http://127.0.0.1:8090',
+    this.baseUrl = const String.fromEnvironment(
+      'GENIE_API_URL',
+      defaultValue: 'http://127.0.0.1:8090',
+    ),
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client();
 
