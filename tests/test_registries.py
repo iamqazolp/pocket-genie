@@ -6,7 +6,6 @@ from pocket_genie.registry import (
     SkillRegistry,
     ToolRegistry,
     parse_tool_calls_from_text,
-    sanitize_json_schema,
 )
 from pocket_genie.shared import ChatMessage
 

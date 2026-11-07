@@ -1,33 +1,37 @@
-# Pocket-Genie Architecture
+# Pocket-Genie Architecture (`v0.3.0`)
 
-## 1. Execution Lifecycle & Parallel State Pre-Processing
+## 1. Compiled LangGraph `StateGraph`, LangChain Adapters & Langfuse Tracing
 
-Each incoming request passes through three parallel pre-processing nodes before entering the main streaming execution node (`GenieExecutionGraph` in `src/pocket_genie/core/graph.py`):
+Each incoming request executes through a compiled **`langgraph.graph.StateGraph`** (`GenieExecutionGraph` in `src/pocket_genie/core/graph.py`) backed by `InMemorySaver` thread checkpointing and wrapped by **`GenieLangfuseTracer`** (`src/pocket_genie/observability/langfuse_tracer.py`) for OpenTelemetry span/generation/guardrail observability.
 
-1. **`user_messages_summary_node`**: Incrementally updates the summary of user queries across the active session.
-2. **`recent_conversations_node`**: Retrieves and caches the 3 most recent session summaries for the active workspace.
-3. **`load_user_memories_node`**: Loads pinned user preferences and workspace facts from `SessionMemoryStore`.
+*(On `aarch64` Android Termux where native extensions are omitted, `GenieExecutionGraph` automatically falls back to a lightweight `ThreadPoolExecutor` graph runner executing the identical node topology.)*
+
+### Parallel Pre-Processing Fan-Out (`START -> route_dispatch`)
+1. **`user_messages_summary`**: Incrementally updates the rolling summary of user queries across the active session.
+2. **`recent_conversations`**: Retrieves and caches the 3 most recent session summaries for the active workspace.
+3. **`load_user_memories`**: Loads pinned user preferences and workspace facts from `SessionMemoryStore`.
+4. **`jev_system_one_triage`**: Queries **TypeSafe Jev** (`POST https://openrouter.ai/api/alpha/decisions` with calibrated offline fallback) in a single batched System-One call (`prompt_injection` `noul`, `mutating_intent` `noul`, `route_specialist` `choice`, and `precision_tier` `score`) to short-circuit prompt injections, pre-escalate precision tiers (`t1 -> t2/t3`), and bypass Supervisor prefill on high-confidence single-domain queries.
 
 ```mermaid
 flowchart TD
-    START([User Query]) --> PreSummary[user_messages_summary_node\nSession query summary]
-    START --> PreRecents[recent_conversations_node\nLast 3 session summaries]
-    START --> PreMemory[load_user_memories_node\nPinned user preferences & facts]
+    START([User Query]) --> PreSummary[user_messages_summary\nSession query summary]
+    START --> PreRecents[recent_conversations\nLast 3 session summaries]
+    START --> PreMemory[load_user_memories\nPinned user preferences & facts]
+    START --> PreJev[jev_system_one_triage\nTypeSafe Jev Decisions: noul / choice / score]
 
-    PreSummary --> Core[GenieExecutionGraph\n_route_and_stream]
-    PreRecents --> Core
-    PreMemory --> Core
+    PreSummary --> Dispatch[route_dispatch\nConditional StateGraph Barrier]
+    PreRecents --> Dispatch
+    PreMemory --> Dispatch
+    PreJev --> Dispatch
 
-    subgraph CoreEngine [Multi-Route Execution Engine]
-        Core --> Router{Route by agent_type}
-        Router -->|supervisor| SupTiers[Supervisor Graph\nt1: P_fast -> t2: P_mixed -> t3: P_accurate]
-        Router -->|scoped-demo| ScopedGraph[Scoped Demo Graph\nRead-only KB, SQL, Device]
-        Router -->|red-agent| RedAgent[Red-Teaming & Quant Fault Agent]
-        Router -->|run-assistant| RunAssistant[Run Assistant Swarm]
-        Router -->|direct-specialist| DirectGraph[Direct Specialist Subgraph]
+    subgraph CoreEngine [Multi-Route Bounded ReAct Engine]
+        Dispatch -->|injection >= 0.80| JevBlock[jev_guardrail_block_node\nZero-LLM System-One Halt]
+        Dispatch -->|supervisor / scoped-demo / run-assistant| SupNode[supervisor_node\nBounded ReAct Loop + Tiered t1->t2->t3]
+        Dispatch -->|direct-specialist / Jev fast-path| DirectNode[direct_specialist_node\nIsolated Domain ReAct Subgraph]
+        Dispatch -->|red-agent| RedNode[red_agent_node\nAdversarial Quant & Schema Probe]
 
-        SupTiers --> DelegatedTools[Agent-as-Tool Delegation\ncreate_task_<specialist>_t<tier>]
-        SupTiers --> DirectTools[Supervisor Direct Tools\nMemory, Skills, Visualization, SQL]
+        SupNode --> DelegatedTools[Agent-as-Tool Delegation\ncreate_task_<specialist>_t<tier>]
+        SupNode --> DirectTools[LangChain StructuredTools\nMemory, Skills, Visualization, SQL]
     end
 
     DelegatedTools --> DevOps[DevOps & Repo Specialist]
@@ -36,38 +40,46 @@ flowchart TD
     DelegatedTools --> Device[Device & Termux Specialist]
     DelegatedTools --> MCP[MCP Server Specialists]
 
-    Core --> History[_capture_to_full_history +\nBOS-Sink INT4 KV Compaction]
-    History --> END([StreamWriter Events])
+    JevBlock --> History[capture_to_full_history +\nBOS-Sink INT4 KV Compaction]
+    SupNode --> History
+    DirectNode --> History
+    RedNode --> History
+    History --> END([StreamWriter + Langfuse OTel Spans])
 ```
 
 ---
 
 ## 2. Core Design Principles
 
-### Agent-as-a-Tool Delegation & Schema Narrowing (`core/delegation.py`)
-Rather than exposing 20+ tools simultaneously to a 4-bit quantized model, the Supervisor invokes domain specialists via typed tools named `create_task_<agent_id>_t<tier>`. Each specialist runs in an isolated subgraph with only 2–5 domain-scoped tools, streaming progressive `ToolCallChunk` fragments (`ToolCallChunkAccumulator`) and `subagent_reasoning` events. Unrecoverable specialist exceptions are returned as `[DELEGATION_ERROR]` observations so the Supervisor can recover or escalate precision tier.
+### Bounded ReAct Agent-as-a-Tool Delegation (`core/delegation.py` & `core/supervisor_agent.py`)
+Rather than exposing 20+ tools simultaneously to a 4-bit quantized model, the Supervisor invokes domain specialists via typed tools named `create_task_<agent_id>_t<tier>`. Both the Supervisor and each specialist run bounded multi-step ReAct loops (`max_steps=3`), chaining sequential tool calls (`git_status` $\rightarrow$ `git_diff` $\rightarrow$ synthesis), streaming progressive `ToolCallChunk` fragments (`ToolCallChunkAccumulator`), and pausing cleanly whenever `HumanInTheLoopMiddleware` emits `[HITL_PENDING:<id>]`.
 
-### Quantization-Aware Tier Escalation (`quant/` & `middlewares/fallback.py`)
-`TieredAgentFactory` binds three activation precision profiles sharing the same 4-bit weight tensor (`315.1 MB`):
-- **Tier 1 (`t1` — `P_fast`):** Uniform `W4A8` with 3-boundary SmoothQuant (`8.00` effective activation bits).
-- **Tier 2 (`t2` — `P_mixed`):** Promotes only the high-kurtosis `mlp.down_proj` layers (`Layers 0, 18, 21–23`, `<5%` MAC overhead) to `UINT16` activations (`8.24` effective activation bits) paired with `FastJsonSchemaParser` grammar constraints.
-- **Tier 3 (`t3` — `P_accurate`):** Full in-place `W4A16` activation promotion (`16.0` effective activation bits, `0.0 MB` extra weight RAM).
+### LangChain & Langfuse Interoperability (`integrations/langchain_bridge.py` & `observability/langfuse_tracer.py`)
+- **`ToolSpec.to_langchain_tool()`**: Dynamically synthesizes Pydantic v2 `args_schema` models from sanitized JSON Schemas to expose any built-in or MCP tool as a `langchain_core.tools.StructuredTool`.
+- **`PocketGenieChatModel`**: Implements `langchain_core.language_models.chat_models.BaseChatModel` (`bind_tools`, `usage_metadata`, `response_metadata["quant_telemetry"]`) over any Pocket-Genie backend.
+- **`GenieLangfuseTracer` & `LangfuseTracingMiddleware`**: Exports OpenTelemetry-native Langfuse v5 `agent`, `generation`, `tool`, and `guardrail` observations alongside numeric quantization scores (`effective_act_bits`, `promoted_token_ratio`, `kv_memory_saved_mb`), plus a local ring buffer inspectable via `GET /api/v1/traces`.
 
-During decoding, `TokenPrecisionRouter` (`quant/entropy_router.py`) monitors the top-2 logit margin $\Delta z_t = z_{(1),t} - z_{(2),t}$ and token entropy $H(p_t)$, promoting individual high-uncertainty decision tokens while keeping structural JSON tokens on `P_fast`.
-
-### Prompt-Prefix Caching & BOS-Sink `INT4` KV Cache (`quant/kv_cache.py`)
-System prompts rendered by `render_supervisor_system_prompt` avoid dynamic wall-clock timestamps, pinning `session_created_at` and session-start memories while querying live time on demand via `memory.get_current_datetime`. `BOSSinkINT4KVCache` pins the static system/schema prefix and compresses middle tool-observation history using per-channel asymmetric `INT4` for Keys (`K`) and per-token asymmetric `INT4` for Values (`V`), while preserving token-0 BOS attention sinks and the recent sliding window in `FP16`.
+### Live Quantization Runtime & Tier Escalation (`quant/hf_backend.py` & `middlewares/fallback.py`)
+`SharedHFQuantRuntime` and `QuantizedPyTorchBackend` (`--backend hf-quant`) execute real HuggingFace/PyTorch models (`Qwen/Qwen2.5-0.5B-Instruct`, `1.5B`, `3B`) on Apple Silicon MPS, CUDA, or CPU:
+1. **Empirical Kurtosis Calibration (`calibrate_layer_sensitivities`):** Measures per-layer excess kurtosis $\kappa$ and `W4A8` MSE in a live forward pass to identify SwiGLU `mlp.down_proj` outlier projections automatically, then migrates channel scales via Boundary-C SmoothQuant (`migrate_swiglu_down_proj_scale`).
+2. **Zero-Weight-Overhead Activation Profiles (`0.0 MB` fallback RAM):**
+   - **Tier 1 (`t1` — `P_fast`):** Uniform `W4A8` (`8.00` effective activation bits) + mid-decode single-token precision promotion via `TokenPrecisionRouter`.
+   - **Tier 2 (`t2` — `P_mixed`):** Selective `UINT16` activation hooks on top-kurtosis `mlp.down_proj` layers (`~8.57` effective activation bits) + cached-FSM `FastJsonSchemaParser` (`TokenEnforcer`) grammar constraints.
+   - **Tier 3 (`t3` — `P_accurate`):** Full in-place `W4A16` (`16.0` effective activation bits) + `FastJsonSchemaParser`.
+3. **Live Logprobs Routing (`OpenAICompatibleBackend`):** Requests `logprobs=True, top_logprobs=5` from Ollama/`llama-server` endpoints so `TokenPrecisionRouter` computes genuine $\Delta z_t$ margins and Shannon entropy on remote/GGUF backends as well.
+4. **Prompt-Prefix Caching & BOS-Sink `INT4` KV Cache (`quant/kv_cache.py`):** Pins static system/schema prefixes and compresses middle tool history using per-channel asymmetric `INT4` for Keys (`K`) and per-token asymmetric `INT4` for Values (`V`), preserving BOS sink tokens (`0..3`) and recent window (`W=64`) in `FP16`.
 
 ---
 
-## 3. Nine-Stage Middleware Pipeline (`middlewares/`)
+## 3. Ten-Stage Middleware Pipeline (`middlewares/`)
 
 1. **`MessageSanitizerMiddleware`**: Removes orphaned tool messages and strips unclosed `<tool_call>` tags from interrupted streams.
 2. **`DynamicSupervisorPromptMiddleware`**: Injects prefix-cacheable system prompts, pinned user memories, and the skill catalog.
 3. **`CustomSummarizationMiddleware`**: Compacts older conversation turns into a rolling `RunningSummary` when token or message limits are exceeded.
 4. **`ProjectScopedToolsMiddleware`**: Filters out project-scoped or mutating tools when running in `scoped-demo` or unscoped contexts.
-5. **`FallbackMiddleware`**: Escalates across `t1 -> t2 -> t3` on model refusal, corrupted tool JSON, or backend faults.
-6. **`RefusalDetectionMiddleware`**: Flags model refusals and malformed tool syntax for recovery.
-7. **`RepeatToolCallBreakerMiddleware`**: Hashes canonical `(tool_name, arguments)` invocations to halt cyclical tool loops and escalate precision tier.
-8. **`SQLTableAllowlistMiddleware`**: Enforces read-only `SELECT` semantics (including CTE alias resolution) against `sql_table_registry.json`.
-9. **`HumanInTheLoopMiddleware`**, **`ToolResultTruncationMiddleware`**, & **`ToolErrorMiddleware`**: Gates mutating tools for user approval, truncates oversized outputs along line boundaries, and formats tool exceptions into `[TOOL_ERROR]` strings.
+5. **`LangfuseTracingMiddleware`**: Records nested `generation`, `tool`, and `guardrail` spans + quantization telemetry scores into Langfuse.
+6. **`FallbackMiddleware`**: Escalates across `t1 -> t2 -> t3` on model refusal, corrupted tool JSON, or backend faults.
+7. **`RefusalDetectionMiddleware`**: Flags model refusals and malformed tool syntax for recovery.
+8. **`RepeatToolCallBreakerMiddleware`**: Hashes canonical `(tool_name, arguments)` invocations to halt cyclical tool loops and escalate precision tier.
+9. **`SQLTableAllowlistMiddleware`**: Enforces read-only `SELECT` semantics (including CTE alias resolution) against `sql_table_registry.json`.
+10. **`HumanInTheLoopMiddleware`**, **`ToolResultTruncationMiddleware`**, & **`ToolErrorMiddleware`**: Gates mutating tools for user approval (with post-approval LLM synthesis), truncates oversized outputs along line boundaries, and formats tool exceptions into `[TOOL_ERROR]` strings.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 from pocket_genie.prompts.supervisor_prompt import load_sql_table_registry
@@ -9,12 +10,14 @@ from pocket_genie.registry.tools import ToolRegistry
 
 
 class WorkspaceSQLStore:
-    """In-memory SQLite analytics engine populated with quantization and session telemetry tables."""
+    """In-memory SQLite analytics engine populated with empirical benchmark artifacts and quantization tables."""
 
-    def __init__(self) -> None:
+    def __init__(self, workspace_dir: Path | None = None) -> None:
+        self._workspace_dir = workspace_dir
         self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._bootstrap_tables()
+        self._ingest_latest_eval_artifact()
 
     def _bootstrap_tables(self) -> None:
         cur = self._conn.cursor()
@@ -90,6 +93,65 @@ class WorkspaceSQLStore:
         )
         self._conn.commit()
 
+    def _ingest_latest_eval_artifact(self) -> None:
+        candidates: list[Path] = []
+        if self._workspace_dir is not None:
+            candidates.append(self._workspace_dir / "benchmarks" / "latest_eval.json")
+        repo_root = Path(__file__).resolve().parents[3]
+        candidates.append(repo_root / "benchmarks" / "latest_eval.json")
+
+        artifact_path = next((p for p in candidates if p.exists() and p.is_file()), None)
+        if artifact_path is None:
+            return
+        try:
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        cur = self._conn.cursor()
+        for r in payload.get("recipes") or []:
+            cur.execute(
+                "INSERT INTO ablation_results VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(r.get("recipe_id", "eval")),
+                    float(r.get("avg_act_bits", 8.0)),
+                    float(r.get("footprint_mb", 315.1)),
+                    0.0,
+                    str(r.get("mode", "constrained")),
+                    float(r.get("json_valid_rate", 0.0)),
+                    float(r.get("tool_exact_rate", 0.0)),
+                ),
+            )
+            cur.execute(
+                "INSERT INTO failure_taxonomy VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(r.get("recipe_id", "eval")),
+                    str(r.get("mode", "constrained")),
+                    "multi_domain_30",
+                    int(r.get("total", 0)),
+                    int(r.get("tool_exact", 0)),
+                    int(r.get("corrupted_json", 0)),
+                    int(r.get("wrong_tool", 0)),
+                    int(r.get("invalid_schema", 0)),
+                    0,
+                ),
+            )
+        for lyr in payload.get("top_sensitive_layers") or []:
+            kurt = float(lyr.get("kurtosis_all", 0.0))
+            cur.execute(
+                "INSERT INTO layer_telemetry VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    int(lyr.get("layer_idx", 0)),
+                    str(lyr.get("projection", "linear")),
+                    kurt,
+                    kurt,
+                    0.0,
+                    0.0,
+                    float(lyr.get("mse_w4a8", 0.0)),
+                ),
+            )
+        self._conn.commit()
+
     def execute_select(self, query: str) -> list[dict[str, Any]]:
         cur = self._conn.cursor()
         cur.execute(query)
@@ -97,8 +159,12 @@ class WorkspaceSQLStore:
         return [dict(r) for r in rows]
 
 
-def register_sql_tools(registry: ToolRegistry, store: WorkspaceSQLStore | None = None) -> WorkspaceSQLStore:
-    sql_store = store or WorkspaceSQLStore()
+def register_sql_tools(
+    registry: ToolRegistry,
+    store: WorkspaceSQLStore | None = None,
+    workspace_dir: Path | None = None,
+) -> WorkspaceSQLStore:
+    sql_store = store or WorkspaceSQLStore(workspace_dir=workspace_dir)
 
     @registry.register(
         name="sql.query_workspace",

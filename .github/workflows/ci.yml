@@ -7,17 +7,36 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  test-termux-minimal:
+    name: Edge / Termux Zero-Native-Deps Suite
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install dependencies
+      - name: Install minimal dependencies
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip ruff
           pip install -r requirements-termux.txt
           pip install -e . --no-deps
-      - name: Run unit tests
+      - name: Lint with Ruff
+        run: ruff check src tests
+      - name: Run minimal unit tests
+        run: pytest -q
+
+  test-full-stack:
+    name: Full Stack (PyTorch Quant + LangGraph + LangChain + Langfuse)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install CPU PyTorch and full dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
+      - name: Run full test suite
         run: pytest -q

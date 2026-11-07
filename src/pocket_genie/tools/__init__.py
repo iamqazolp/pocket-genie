@@ -29,7 +29,7 @@ def register_all_builtin_tools(
         kb.index_directory(workspace_dir, max_files=40)
 
     register_devops_tools(registry, workspace_dir)
-    sql = register_sql_tools(registry, sql_store)
+    sql = register_sql_tools(registry, sql_store, workspace_dir=workspace_dir)
     dev_state = register_device_tools(registry)
     register_visualization_tools(registry)
     register_memory_and_kb_tools(registry, mem, skills, kb)

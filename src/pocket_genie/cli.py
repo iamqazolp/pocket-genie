@@ -4,7 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
-from pocket_genie.core import list_specialist_configs
+from pocket_genie.core import GenieExecutionGraph, list_specialist_configs
+from pocket_genie.eval import run_eval_suite
 from pocket_genie.mcp import MCPBridge
 from pocket_genie.quant import (
     BOSSinkINT4KVCache,
@@ -138,10 +139,31 @@ def cmd_bench(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    ws = Path(args.workspace_dir).resolve() if args.workspace_dir else Path.cwd()
+    out_path = Path(args.output).resolve() if args.output else None
+    report = run_eval_suite(
+        backend_mode=args.backend,
+        model_id=args.model,
+        base_url=args.base_url,
+        workspace_dir=ws,
+        max_tasks=args.max_tasks,
+        output_path=out_path,
+    )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_graph(_args: argparse.Namespace) -> int:
+    graph = GenieExecutionGraph()
+    print(graph.get_mermaid_graph())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="genie",
-        description="Pocket-Genie CLI: quantization-aware multi-agent supervisor, skill/MCP registry, and mobile HITL console.",
+        description="Pocket-Genie CLI: quantization-aware LangGraph/LangChain supervisor, Langfuse tracing, and mobile HITL console.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -152,9 +174,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_srv.add_argument("--mcp-config", type=str, default=None)
     p_srv.add_argument("--static-dir", type=str, default=None, help="Custom frontend build directory (e.g. React/Vite dist)")
     p_srv.add_argument("--api-only", action="store_true", help="Disable static UI serving (headless mode for Flutter/mobile)")
-    p_srv.add_argument("--backend", type=str, default="replay", choices=["replay", "local-llm"], help="Model execution backend")
+    p_srv.add_argument("--backend", type=str, default="replay", choices=["replay", "local-llm", "hf-quant"], help="Model execution backend")
     p_srv.add_argument("--base-url", type=str, default="http://127.0.0.1:11434/v1", help="OpenAI-compatible endpoint (llama-server or ollama)")
-    p_srv.add_argument("--model", type=str, default="qwen2.5-coder:3b", help="Primary model identifier (t1/t2)")
+    p_srv.add_argument("--model", type=str, default="qwen2.5-coder:7b", help="Primary model identifier (Ollama tag or HuggingFace repo ID)")
     p_srv.add_argument("--fallback-model", type=str, default=None, help="Optional larger fallback model for t3 escalation")
     p_srv.set_defaults(func=cmd_serve)
 
@@ -175,9 +197,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["none", "corrupted_json", "refusal", "hitl_patch"],
     )
     p_ask.add_argument("--workspace-dir", type=str, default=None)
-    p_ask.add_argument("--backend", type=str, default="replay", choices=["replay", "local-llm"])
+    p_ask.add_argument("--backend", type=str, default="replay", choices=["replay", "local-llm", "hf-quant"])
     p_ask.add_argument("--base-url", type=str, default="http://127.0.0.1:11434/v1")
-    p_ask.add_argument("--model", type=str, default="qwen2.5-coder:3b")
+    p_ask.add_argument("--model", type=str, default="qwen2.5-coder:7b")
     p_ask.add_argument("--fallback-model", type=str, default=None)
     p_ask.set_defaults(func=cmd_ask)
 
@@ -193,6 +215,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_bn = sub.add_parser("bench", help="Run quantization profile, token-router, and INT4 KV cache benchmark.")
     p_bn.set_defaults(func=cmd_bench)
+
+    p_ev = sub.add_parser("eval", help="Run empirical 30-task multi-domain tool-calling & quantization benchmark.")
+    p_ev.add_argument("--backend", type=str, default="hf-quant", choices=["replay", "local-llm", "hf-quant"])
+    p_ev.add_argument("--model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
+    p_ev.add_argument("--base-url", type=str, default="http://127.0.0.1:11434/v1")
+    p_ev.add_argument("--workspace-dir", type=str, default=None)
+    p_ev.add_argument("--max-tasks", type=int, default=None)
+    p_ev.add_argument("--output", type=str, default=None, help="Optional JSON path to persist benchmark report")
+    p_ev.set_defaults(func=cmd_eval)
+
+    p_gr = sub.add_parser("graph", help="Print compiled LangGraph StateGraph topology in Mermaid format.")
+    p_gr.set_defaults(func=cmd_graph)
 
     return parser
 

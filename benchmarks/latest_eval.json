@@ -1,0 +1,160 @@
+{
+  "generated_at": "2026-11-10T05:01:11Z",
+  "backend_mode": "hf-quant",
+  "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+  "num_tasks": 10,
+  "recipes": [
+    {
+      "recipe_id": "W4A4_unconstrained",
+      "mode": "unconstrained",
+      "weight_bits": 4.0,
+      "avg_act_bits": 4.0,
+      "footprint_mb": 430.42,
+      "total": 10,
+      "json_valid": 0,
+      "schema_valid": 0,
+      "tool_exact": 0,
+      "corrupted_json": 10,
+      "wrong_tool": 0,
+      "invalid_schema": 0,
+      "promoted_token_ratio": 0.0,
+      "mean_latency_ms": 8120.15,
+      "kv_saved_mb_2k": 16.707,
+      "json_valid_rate": 0.0,
+      "schema_valid_rate": 0.0,
+      "tool_exact_rate": 0.0
+    },
+    {
+      "recipe_id": "P_fast_W4A8",
+      "mode": "unconstrained",
+      "weight_bits": 4.0,
+      "avg_act_bits": 8.0,
+      "footprint_mb": 430.42,
+      "total": 10,
+      "json_valid": 0,
+      "schema_valid": 0,
+      "tool_exact": 0,
+      "corrupted_json": 10,
+      "wrong_tool": 0,
+      "invalid_schema": 0,
+      "promoted_token_ratio": 0.0,
+      "mean_latency_ms": 5164.89,
+      "kv_saved_mb_2k": 16.707,
+      "json_valid_rate": 0.0,
+      "schema_valid_rate": 0.0,
+      "tool_exact_rate": 0.0
+    },
+    {
+      "recipe_id": "P_mixed_W4A8_16_FSM",
+      "mode": "constrained",
+      "weight_bits": 4.0,
+      "avg_act_bits": 8.57,
+      "footprint_mb": 430.42,
+      "total": 10,
+      "json_valid": 10,
+      "schema_valid": 10,
+      "tool_exact": 7,
+      "corrupted_json": 0,
+      "wrong_tool": 3,
+      "invalid_schema": 0,
+      "promoted_token_ratio": 0.6632,
+      "mean_latency_ms": 4357.92,
+      "kv_saved_mb_2k": 16.707,
+      "json_valid_rate": 1.0,
+      "schema_valid_rate": 1.0,
+      "tool_exact_rate": 0.7
+    },
+    {
+      "recipe_id": "P_accurate_W4A16_FSM",
+      "mode": "constrained",
+      "weight_bits": 4.0,
+      "avg_act_bits": 16.0,
+      "footprint_mb": 430.42,
+      "total": 10,
+      "json_valid": 10,
+      "schema_valid": 10,
+      "tool_exact": 6,
+      "corrupted_json": 0,
+      "wrong_tool": 4,
+      "invalid_schema": 0,
+      "promoted_token_ratio": 0.6552,
+      "mean_latency_ms": 747.77,
+      "kv_saved_mb_2k": 16.707,
+      "json_valid_rate": 1.0,
+      "schema_valid_rate": 1.0,
+      "tool_exact_rate": 0.6
+    }
+  ],
+  "top_sensitive_layers": [
+    {
+      "layer_idx": 2,
+      "projection": "mlp.down_proj",
+      "kurtosis_all": 89759.898,
+      "mse_w4a8": 0.000499,
+      "sensitivity_score": 90207.8
+    },
+    {
+      "layer_idx": 21,
+      "projection": "mlp.down_proj",
+      "kurtosis_all": 65319.215,
+      "mse_w4a8": 0.002812,
+      "sensitivity_score": 67155.991
+    },
+    {
+      "layer_idx": 3,
+      "projection": "mlp.down_proj",
+      "kurtosis_all": 52201.875,
+      "mse_w4a8": 0.00081,
+      "sensitivity_score": 52624.71
+    },
+    {
+      "layer_idx": 5,
+      "projection": "mlp.down_proj",
+      "kurtosis_all": 26247.305,
+      "mse_w4a8": 0.070562,
+      "sensitivity_score": 44767.928
+    },
+    {
+      "layer_idx": 3,
+      "projection": "mlp.gate_proj",
+      "kurtosis_all": 12983.565,
+      "mse_w4a8": 0.019219,
+      "sensitivity_score": 15478.876
+    },
+    {
+      "layer_idx": 3,
+      "projection": "mlp.up_proj",
+      "kurtosis_all": 12983.565,
+      "mse_w4a8": 0.019219,
+      "sensitivity_score": 15478.876
+    },
+    {
+      "layer_idx": 21,
+      "projection": "mlp.gate_proj",
+      "kurtosis_all": 6551.099,
+      "mse_w4a8": 0.015065,
+      "sensitivity_score": 7538.022
+    },
+    {
+      "layer_idx": 21,
+      "projection": "mlp.up_proj",
+      "kurtosis_all": 6551.099,
+      "mse_w4a8": 0.015065,
+      "sensitivity_score": 7538.022
+    },
+    {
+      "layer_idx": 1,
+      "projection": "mlp.down_proj",
+      "kurtosis_all": 409.209,
+      "mse_w4a8": 0.010885,
+      "sensitivity_score": 453.751
+    },
+    {
+      "layer_idx": 4,
+      "projection": "mlp.down_proj",
+      "kurtosis_all": 386.655,
+      "mse_w4a8": 0.014087,
+      "sensitivity_score": 441.123
+    }
+  ]
+}
