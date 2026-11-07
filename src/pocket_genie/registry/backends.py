@@ -86,9 +86,24 @@ class DeterministicReplayBackend:
             "",
         )
         if tools:
-            first_tool = tools[0]["function"]["name"]
+            q_lower = last_user.lower()
+            chosen = tools[0]["function"]
+            best_score = -1
+            for t in tools:
+                fn = t["function"]
+                t_name = fn["name"].lower()
+                t_desc = fn.get("description", "").lower()
+                score = sum(
+                    2 for tok in q_lower.replace(".", " ").replace("_", " ").split()
+                    if len(tok) >= 3 and (tok in t_name or tok in t_desc)
+                )
+                if score > best_score:
+                    best_score = score
+                    chosen = fn
+
+            first_tool = chosen["name"]
             args: dict[str, Any] = {}
-            props = tools[0]["function"].get("parameters", {}).get("properties", {})
+            props = chosen.get("parameters", {}).get("properties", {})
             if "query" in props:
                 args["query"] = last_user or "status"
             elif "task" in props:
