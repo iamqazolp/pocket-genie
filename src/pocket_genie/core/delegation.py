@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from pocket_genie.core.agent_configs import SpecialistConfig
 from pocket_genie.core.state import GenieState
@@ -74,8 +73,9 @@ def execute_specialist_subgraph(
     tool_registry: ToolRegistry,
     pipeline: MiddlewarePipeline,
     writer: StreamWriter,
+    max_steps: int = 3,
 ) -> str:
-    """Run an isolated specialist sub-graph with domain-scoped tools, streaming chunks, and error recovery."""
+    """Run an isolated specialist ReAct sub-graph with domain-scoped tools, streaming chunks, and error recovery."""
     scoped_tools: list[ToolSpec] = []
     for domain in config.tool_domains:
         scoped_tools.extend(tool_registry.list_tools(domain=domain))
@@ -90,77 +90,102 @@ def execute_specialist_subgraph(
 
     prev_tier = state.active_tier
     state.active_tier = tier
+    all_observations: list[str] = []
     try:
-        model_ctx = ModelCallContext(
-            state=state,
-            shared=shared,
-            messages=sub_messages,
-            tools=scoped_tools,
-            writer=writer,
-            metadata={"specialist": config.agent_id},
-        )
-        output = pipeline.run_model(
-            model_ctx,
-            lambda c: factory.get_backend(c.state.active_tier).generate(
-                c.messages,
-                tools=[t.to_openai_tool() for t in c.tools] if c.tools else None,
-                constrain_schema=(c.state.active_tier != "t1"),
-            ),
-        )
-
-        reasoning = extract_reasoning_from_message(output.message)
-        if reasoning:
-            writer.emit(
-                "subagent_reasoning",
-                specialist=config.agent_id,
-                tier=state.active_tier,
-                reasoning=reasoning,
-            )
-
-        accumulator = ToolCallChunkAccumulator()
-        for ch in output.streamed_chunks:
-            cid = accumulator.ingest(ch)
-            writer.emit(
-                "tool_message_chunk",
-                specialist=config.agent_id,
-                call_id=cid,
-                fragment=ch.arguments_fragment,
-            )
-
-        invocations = output.message.tool_calls or (
-            accumulator.finalize() if output.streamed_chunks else []
-        )
-        if not invocations:
-            return output.message.content or f"[{config.agent_id}] Completed with no tool calls."
-
-        observations: list[str] = []
-        for inv in invocations:
-            spec = tool_registry.get(inv.name)
-            tool_ctx = ToolCallContext(
+        for _step_idx in range(max(1, max_steps)):
+            model_ctx = ModelCallContext(
                 state=state,
                 shared=shared,
-                invocation=inv,
-                spec=spec,
-                specialist=config.agent_id,
+                messages=sub_messages,
+                tools=scoped_tools,
                 writer=writer,
+                metadata={"specialist": config.agent_id},
+            )
+            output = pipeline.run_model(
+                model_ctx,
+                lambda c: factory.get_backend(c.state.active_tier).generate(
+                    c.messages,
+                    tools=[t.to_openai_tool() for t in c.tools] if c.tools else None,
+                    constrain_schema=(c.state.active_tier != "t1"),
+                ),
             )
 
-            def _invoke_tool(tc: ToolCallContext) -> str:
-                if tc.spec is None:
-                    raise KeyError(f"Specialist `{config.agent_id}` called unregistered tool `{tc.invocation.name}`")
-                res = tc.spec.handler(**tc.invocation.arguments)
-                return res if isinstance(res, str) else json.dumps(res, indent=2, default=str)
+            reasoning = extract_reasoning_from_message(output.message)
+            if reasoning:
+                writer.emit(
+                    "subagent_reasoning",
+                    specialist=config.agent_id,
+                    tier=state.active_tier,
+                    reasoning=reasoning,
+                )
 
-            obs = pipeline.run_tool(tool_ctx, _invoke_tool)
-            writer.emit(
-                "tool_message",
-                specialist=config.agent_id,
-                tool=inv.name,
-                observation=obs,
+            accumulator = ToolCallChunkAccumulator()
+            for ch in output.streamed_chunks:
+                cid = accumulator.ingest(ch)
+                writer.emit(
+                    "tool_message_chunk",
+                    specialist=config.agent_id,
+                    call_id=cid,
+                    fragment=ch.arguments_fragment,
+                )
+
+            invocations = output.message.tool_calls or (
+                accumulator.finalize() if output.streamed_chunks else []
             )
-            observations.append(f"[{inv.name}] {obs}")
+            if not invocations:
+                if output.message.content:
+                    return output.message.content
+                if all_observations:
+                    return "\n".join(all_observations)
+                return f"[{config.agent_id}] Completed with no tool calls."
 
-        return "\n".join(observations)
+            sub_messages.append(output.message)
+            step_observations: list[str] = []
+            halted = False
+            for inv in invocations:
+                spec = tool_registry.get(inv.name)
+                tool_ctx = ToolCallContext(
+                    state=state,
+                    shared=shared,
+                    invocation=inv,
+                    spec=spec,
+                    specialist=config.agent_id,
+                    writer=writer,
+                )
+
+                def _invoke_tool(tc: ToolCallContext) -> str:
+                    if tc.spec is None:
+                        raise KeyError(
+                            f"Specialist `{config.agent_id}` called unregistered tool `{tc.invocation.name}`"
+                        )
+                    res = tc.spec.handler(**tc.invocation.arguments)
+                    return res if isinstance(res, str) else json.dumps(res, indent=2, default=str)
+
+                obs = pipeline.run_tool(tool_ctx, _invoke_tool)
+                writer.emit(
+                    "tool_message",
+                    specialist=config.agent_id,
+                    tool=inv.name,
+                    observation=obs,
+                )
+                formatted_obs = f"[{inv.name}] {obs}"
+                step_observations.append(formatted_obs)
+                all_observations.append(formatted_obs)
+                sub_messages.append(
+                    ChatMessage(
+                        role="tool",
+                        content=obs,
+                        name=inv.name,
+                        tool_call_id=inv.id,
+                    )
+                )
+                if obs.startswith(("[HITL_PENDING:", "[HITL_REJECTED]", "[LOOP_BREAKER]")):
+                    halted = True
+
+            if halted:
+                return "\n".join(step_observations)
+
+        return "\n".join(all_observations)
     except Exception as exc:
         err = f"[DELEGATION_ERROR] Specialist `{config.agent_id}` failed on tier {tier}: {exc}"
         writer.emit(

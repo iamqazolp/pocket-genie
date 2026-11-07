@@ -67,94 +67,122 @@ class SupervisorAgent:
         state: GenieState,
         shared: GenieSharedContext,
         writer: StreamWriter,
+        max_steps: int = 3,
     ) -> ChatMessage:
-        sup_tools = self.build_supervisor_tools(state=state, shared=shared, writer=writer)
-        tool_map = {t.name: t for t in sup_tools}
+        all_observations: list[str] = []
 
-        model_ctx = ModelCallContext(
-            state=state,
-            shared=shared,
-            messages=state.messages,
-            tools=sup_tools,
-            writer=writer,
-            metadata={"agent": "supervisor"},
-        )
+        for _step_idx in range(max(1, max_steps)):
+            sup_tools = self.build_supervisor_tools(state=state, shared=shared, writer=writer)
+            tool_map = {t.name: t for t in sup_tools}
 
-        if state.messages and state.messages[0].role == "system":
-            schemas_str = json.dumps([t.to_openai_tool() for t in sup_tools], sort_keys=True)
-            hit = self.factory.kv_cache.pin_prefix(state.messages[0].content, schemas_str)
-            state.quant_telemetry.prefix_kv_hit = hit
-
-        output = self.pipeline.run_model(
-            model_ctx,
-            lambda c: self.factory.get_backend(c.state.active_tier).generate(
-                c.messages,
-                tools=[t.to_openai_tool() for t in c.tools] if c.tools else None,
-                constrain_schema=(c.state.active_tier != "t1"),
-            ),
-        )
-
-        reasoning = extract_reasoning_from_message(output.message)
-        if reasoning:
-            writer.emit("subagent_reasoning", specialist="supervisor", tier=state.active_tier, reasoning=reasoning)
-
-        acc = ToolCallChunkAccumulator()
-        for ch in output.streamed_chunks:
-            cid = acc.ingest(ch)
-            writer.emit("tool_message_chunk", specialist="supervisor", call_id=cid, fragment=ch.arguments_fragment)
-
-        invocations = output.message.tool_calls or (acc.finalize() if output.streamed_chunks else [])
-        state.messages.append(output.message)
-
-        if not invocations:
-            writer.emit("ai_message_chunk", content=output.message.content)
-            return output.message
-
-        observations: list[str] = []
-        for inv in invocations:
-            spec = tool_map.get(inv.name) or self.tool_registry.get(inv.name)
-            if spec is not None and spec.domain == "delegation":
-                obs = spec.handler(**inv.arguments)
-            else:
-                t_ctx = ToolCallContext(
-                    state=state,
-                    shared=shared,
-                    invocation=inv,
-                    spec=spec,
-                    specialist="supervisor",
-                    writer=writer,
-                )
-
-                def _exec_direct(tc: ToolCallContext) -> str:
-                    if tc.spec is None:
-                        raise KeyError(f"Unknown tool `{tc.invocation.name}`")
-                    res = tc.spec.handler(**tc.invocation.arguments)
-                    return res if isinstance(res, str) else json.dumps(res, indent=2, default=str)
-
-                obs = self.pipeline.run_tool(t_ctx, _exec_direct)
-
-            if obs.startswith("[DELEGATION_ERROR]") and state.active_tier == "t1":
-                state.active_tier = "t2"
-                writer.emit(
-                    "middleware_event",
-                    middleware="supervisor_recovery",
-                    escalated_tier="t2",
-                    reason=obs,
-                )
-
-            tool_msg = ChatMessage(
-                role="tool",
-                content=obs,
-                name=inv.name,
-                tool_call_id=inv.id,
+            model_ctx = ModelCallContext(
+                state=state,
+                shared=shared,
+                messages=state.messages,
+                tools=sup_tools,
+                writer=writer,
+                metadata={"agent": "supervisor"},
             )
-            state.messages.append(tool_msg)
-            observations.append(obs)
+
+            if state.messages and state.messages[0].role == "system":
+                schemas_str = json.dumps([t.to_openai_tool() for t in sup_tools], sort_keys=True)
+                hit = self.factory.kv_cache.pin_prefix(state.messages[0].content, schemas_str)
+                state.quant_telemetry.prefix_kv_hit = hit
+
+            output = self.pipeline.run_model(
+                model_ctx,
+                lambda c: self.factory.get_backend(c.state.active_tier).generate(
+                    c.messages,
+                    tools=[t.to_openai_tool() for t in c.tools] if c.tools else None,
+                    constrain_schema=(c.state.active_tier != "t1"),
+                ),
+            )
+
+            reasoning = extract_reasoning_from_message(output.message)
+            if reasoning:
+                writer.emit(
+                    "subagent_reasoning",
+                    specialist="supervisor",
+                    tier=state.active_tier,
+                    reasoning=reasoning,
+                )
+
+            acc = ToolCallChunkAccumulator()
+            for ch in output.streamed_chunks:
+                cid = acc.ingest(ch)
+                writer.emit(
+                    "tool_message_chunk",
+                    specialist="supervisor",
+                    call_id=cid,
+                    fragment=ch.arguments_fragment,
+                )
+
+            invocations = output.message.tool_calls or (acc.finalize() if output.streamed_chunks else [])
+            state.messages.append(output.message)
+
+            if not invocations:
+                writer.emit("ai_message_chunk", content=output.message.content)
+                return output.message
+
+            step_observations: list[str] = []
+            halted = False
+            for inv in invocations:
+                spec = tool_map.get(inv.name) or self.tool_registry.get(inv.name)
+                if spec is not None and spec.domain == "delegation":
+                    obs = spec.handler(**inv.arguments)
+                else:
+                    t_ctx = ToolCallContext(
+                        state=state,
+                        shared=shared,
+                        invocation=inv,
+                        spec=spec,
+                        specialist="supervisor",
+                        writer=writer,
+                    )
+
+                    def _exec_direct(tc: ToolCallContext) -> str:
+                        if tc.spec is None:
+                            raise KeyError(f"Unknown tool `{tc.invocation.name}`")
+                        res = tc.spec.handler(**tc.invocation.arguments)
+                        return res if isinstance(res, str) else json.dumps(res, indent=2, default=str)
+
+                    obs = self.pipeline.run_tool(t_ctx, _exec_direct)
+
+                if obs.startswith("[DELEGATION_ERROR]") and state.active_tier == "t1":
+                    state.active_tier = "t2"
+                    writer.emit(
+                        "middleware_event",
+                        middleware="supervisor_recovery",
+                        escalated_tier="t2",
+                        reason=obs,
+                    )
+
+                tool_msg = ChatMessage(
+                    role="tool",
+                    content=obs,
+                    name=inv.name,
+                    tool_call_id=inv.id,
+                )
+                state.messages.append(tool_msg)
+                step_observations.append(obs)
+                all_observations.append(obs)
+                if "[HITL_PENDING:" in obs or "[LOOP_BREAKER]" in obs:
+                    halted = True
+
+            if halted:
+                paused_msg = ChatMessage(
+                    role="assistant",
+                    content="\n\n".join(step_observations),
+                    reasoning="Paused execution awaiting user approval or loop-breaker intervention.",
+                )
+                state.messages.append(paused_msg)
+                writer.emit("ai_message_chunk", content=paused_msg.content)
+                return paused_msg
 
         synthesis = ChatMessage(
             role="assistant",
-            content="\n\n".join(observations),
-            reasoning="Synthesized specialist and direct tool observations.",
+            content="\n\n".join(all_observations),
+            reasoning="Synthesized specialist and direct tool observations after max ReAct steps.",
         )
         state.messages.append(synthesis)
         writer.emit("ai_message_chunk", content=synthesis.content)
