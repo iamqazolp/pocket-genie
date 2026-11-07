@@ -91,10 +91,10 @@ if JsonSchemaParser is not None and SequenceParser is not None:
             )
 
         def cache_key(self) -> Any:
-            if self._in_open_freetext_string():
-                curr = self.object_stack[-1]
-                return ("json_str_body", (curr.FollowedByChars, self.last_non_whitespace_character))
-            return None
+            return super().cache_key()
+
+        def shortcut_key(self) -> Any:
+            return super().shortcut_key()
 
         def add_character(self, new_character: str) -> Any:
             if self._in_open_freetext_string() and new_character not in ('"', "\\"):
