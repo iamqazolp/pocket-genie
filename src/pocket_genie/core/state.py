@@ -45,3 +45,4 @@ class GenieState:
     )
     pending_hitl: list[HITLApprovalRequest] = dataclasses.field(default_factory=list)
     middleware_trace: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    jev_triage: dict[str, Any] = dataclasses.field(default_factory=dict)

@@ -12,7 +12,7 @@ from pocket_genie.core.delegation import (
     execute_specialist_subgraph,
     extract_reasoning_from_message,
 )
-from pocket_genie.core.graph import GenieExecutionGraph
+from pocket_genie.core.graph import LANGGRAPH_AVAILABLE, GenieExecutionGraph, GenieGraphState
 from pocket_genie.core.memory import RunningSummary, SessionMemoryStore
 from pocket_genie.core.state import GenieState, HITLApprovalRequest, QuantTelemetrySnapshot
 from pocket_genie.core.supervisor_agent import SupervisorAgent
@@ -20,8 +20,10 @@ from pocket_genie.core.tiered_agent_factory import TieredAgentFactory
 
 __all__ = [
     "GenieExecutionGraph",
+    "GenieGraphState",
     "GenieState",
     "HITLApprovalRequest",
+    "LANGGRAPH_AVAILABLE",
     "QuantTelemetrySnapshot",
     "RunningSummary",
     "SPECIALIST_ROSTER",

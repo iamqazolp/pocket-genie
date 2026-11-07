@@ -16,13 +16,15 @@ from pocket_genie.api import (
     format_human_readable_reply,
 )
 from pocket_genie.core import (
+    LANGGRAPH_AVAILABLE,
     GenieExecutionGraph,
     GenieState,
     TieredAgentFactory,
     list_specialist_configs,
 )
+from pocket_genie.integrations import LANGCHAIN_AVAILABLE
 from pocket_genie.mcp import MCPBridge
-from pocket_genie.quant import TokenPrecisionRouter
+from pocket_genie.observability import GenieLangfuseTracer
 from pocket_genie.registry import (
     DeterministicReplayBackend,
     GenerationOutput,
@@ -74,17 +76,23 @@ class PocketGenieService:
         self.env_objects = register_all_builtin_tools(self.tool_registry, self.workspace_dir)
         self.mcp_bridge = MCPBridge(self.tool_registry)
         self.factory = TieredAgentFactory()
+        self.tracer = GenieLangfuseTracer()
         if self.backend_mode == "local-llm":
             self.factory.backends.configure_local_llm(
                 base_url=self.llm_base_url,
                 primary_model=self.primary_model,
                 fallback_model=self.fallback_model,
             )
+        elif self.backend_mode == "hf-quant":
+            runtime = self.factory.backends.configure_hf_quant(model_id=self.primary_model)
+            self.factory.kv_cache = runtime.kv_cache
+            self.factory.profiles = runtime.profiles
         self.graph = GenieExecutionGraph(
             factory=self.factory,
             tool_registry=self.tool_registry,
             skill_registry=self.env_objects["skill_registry"],
             memory_store=self.env_objects["memory_store"],
+            tracer=self.tracer,
         )
         self.state = GenieState(
             session_id="genie-live-01",
@@ -113,7 +121,14 @@ class PocketGenieService:
             "pinned_memories": self.state.pinned_memories,
             "pending_hitl": [h.to_dict() for h in self.state.pending_hitl],
             "middleware_trace": self.state.middleware_trace[-20:],
+            "jev_triage": dict(self.state.jev_triage),
             "quant_telemetry": self.state.quant_telemetry.to_dict(),
+            "observability": {
+                "langgraph_enabled": LANGGRAPH_AVAILABLE,
+                "langchain_enabled": LANGCHAIN_AVAILABLE,
+                "langfuse_enabled": self.tracer.enabled,
+                "trace_count": len(self.tracer.list_traces()),
+            },
             "specialists": [
                 {
                     "agent_id": c.agent_id,
@@ -136,13 +151,20 @@ class PocketGenieService:
         }
 
     def _configure_fault_simulation(self, fault: str, prompt: str) -> None:
-        if self.backend_mode == "local-llm" and fault == "none":
-            self.factory.backends.configure_local_llm(
-                base_url=self.llm_base_url,
-                primary_model=self.primary_model,
-                fallback_model=self.fallback_model,
-            )
-            return
+        if fault == "none":
+            if self.backend_mode == "local-llm":
+                self.factory.backends.configure_local_llm(
+                    base_url=self.llm_base_url,
+                    primary_model=self.primary_model,
+                    fallback_model=self.fallback_model,
+                )
+                return
+            if self.backend_mode == "hf-quant":
+                if self.factory.backends.hf_runtime is None:
+                    runtime = self.factory.backends.configure_hf_quant(model_id=self.primary_model)
+                    self.factory.kv_cache = runtime.kv_cache
+                    self.factory.profiles = runtime.profiles
+                return
 
         b_t1 = DeterministicReplayBackend(tier="t1")
         b_t2 = DeterministicReplayBackend(tier="t2")
@@ -221,28 +243,6 @@ class PocketGenieService:
         writer = StreamWriter(callback=on_event)
         reply, _ = self.graph.invoke(state=self.state, shared=shared, writer=writer)
 
-        router = TokenPrecisionRouter()
-        sample_logits = (
-            [[6.2, 1.1, 0.2], [5.4, 1.0, -0.5], [1.9, 1.4, 1.1], [6.0, 0.8, 0.1]]
-            if self.state.active_tier != "t1" or fault != "none"
-            else [[7.1, 1.0, 0.1], [6.5, 1.2, 0.0], [5.9, 1.1, -0.2], [6.8, 0.9, 0.1]]
-        )
-        for idx, lvec in enumerate(sample_logits):
-            router.evaluate_step(idx, lvec)
-        routed_snap = router.build_telemetry(
-            prefix_kv_hit=self.state.quant_telemetry.prefix_kv_hit,
-            kv_cache_fp16_mb=max(4.8, self.state.quant_telemetry.kv_cache_fp16_mb),
-            kv_cache_quant_mb=max(1.4, self.state.quant_telemetry.kv_cache_quant_mb),
-        )
-        if self.state.active_tier == "t3":
-            routed_snap.tier = "t3"
-            routed_snap.profile = "P_accurate"
-            routed_snap.effective_act_bits = 16.0
-        elif self.state.active_tier == "t2":
-            routed_snap.tier = "t2"
-            routed_snap.profile = "P_mixed"
-        self.state.quant_telemetry = routed_snap
-
         new_approval = (
             self.state.pending_hitl[-1].to_dict()
             if len(self.state.pending_hitl) > prev_hitl_count
@@ -270,19 +270,29 @@ class PocketGenieService:
         if approved:
             output_text = str(self.tool_registry.execute(target_req.tool_name, target_req.arguments))
 
-        self.state.messages.append(
-            ChatMessage(
-                role="tool",
-                content=output_text,
-                name=target_req.tool_name,
-                tool_call_id=request_id,
-            )
+        tool_msg = ChatMessage(
+            role="tool",
+            content=output_text,
+            name=target_req.tool_name,
+            tool_call_id=request_id,
         )
+        self.state.messages.append(tool_msg)
+        self.state.full_history.append(tool_msg)
+
+        synth_out = self.factory.get_backend(self.state.active_tier).generate(
+            self.state.messages,
+            tools=None,
+            constrain_schema=False,
+        )
+        self.state.messages.append(synth_out.message)
+        self.state.full_history.append(synth_out.message)
+
         return {
             "request_id": request_id,
             "status": target_req.status,
             "tool_name": target_req.tool_name,
             "output": output_text,
+            "assistant_reply": format_human_readable_reply(synth_out.message.content),
             "state": self.get_state_summary(),
         }
 
@@ -349,6 +359,10 @@ def create_http_server(
 
             if path in ("/api/v1/status", "/api/state"):
                 self._send_json(svc.get_state_summary())
+                return
+
+            if path == "/api/v1/traces":
+                self._send_json({"traces": svc.tracer.list_traces()})
                 return
 
             if path in ("/api/v1/chat/stream", "/api/stream"):
