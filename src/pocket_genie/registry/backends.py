@@ -7,10 +7,10 @@ import time
 import urllib.request
 from typing import Any, Protocol
 
-from pocket_genie.core.state import QuantTelemetrySnapshot
 from pocket_genie.shared import (
     ChatMessage,
     PrecisionTier,
+    QuantTelemetrySnapshot,
     ToolCallChunk,
     ToolInvocation,
 )
@@ -93,7 +93,7 @@ def _select_tool_for_query(query: str, tools: list[dict[str, Any]]) -> dict[str,
 
 
 def parse_tool_calls_from_text(content: str) -> list[ToolInvocation]:
-    """Extract tool invocations from <tool_call> tags or raw JSON objects emitted by local Qwen/Llama models."""
+    """Extract tool invocations from <tool_call> tags, markdown fences, or raw JSON objects."""
     invocations: list[ToolInvocation] = []
     for idx, match in enumerate(_TOOL_CALL_BLOCK_RE.finditer(content)):
         try:
@@ -112,24 +112,39 @@ def parse_tool_calls_from_text(content: str) -> list[ToolInvocation]:
         return invocations
 
     stripped = content.strip()
-    if stripped.startswith("{") and stripped.endswith("}"):
-        try:
-            obj = json.loads(stripped)
-            if isinstance(obj, dict) and "name" in obj and "arguments" in obj:
-                args = obj["arguments"]
-                if isinstance(args, str):
-                    args = json.loads(args)
-                invocations.append(
-                    ToolInvocation(id="call_json_0", name=str(obj["name"]), arguments=dict(args))
-                )
-        except Exception:
-            pass
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            stripped = "\n".join(lines[1:-1]).strip()
+
+    candidates = [stripped]
+    first_brace = stripped.find("{")
+    last_brace = stripped.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        brace_slice = stripped[first_brace : last_brace + 1]
+        if brace_slice != stripped:
+            candidates.append(brace_slice)
+
+    for cand in candidates:
+        if cand.startswith("{") and cand.endswith("}"):
+            try:
+                obj = json.loads(cand)
+                if isinstance(obj, dict) and "name" in obj:
+                    args = obj.get("arguments") or {}
+                    if isinstance(args, str):
+                        args = json.loads(args)
+                    invocations.append(
+                        ToolInvocation(id="call_json_0", name=str(obj["name"]), arguments=dict(args))
+                    )
+                    break
+            except Exception:
+                continue
 
     return invocations
 
 
 class DeterministicReplayBackend:
-    """Deterministic backend with intent-aware tool routing for offline Termux, CI, and UI testing."""
+    """Deterministic backend with ReAct synthesis and intent-aware tool routing for offline Termux, CI, and UI testing."""
 
     def __init__(
         self,
@@ -173,6 +188,23 @@ class DeterministicReplayBackend:
                 return item
             if isinstance(item, ChatMessage):
                 return GenerationOutput(message=item, telemetry=telemetry)
+
+        if messages and messages[-1].role == "tool":
+            trailing_obs: list[str] = []
+            for m in reversed(messages):
+                if m.role != "tool":
+                    break
+                prefix = f"[{m.name}] " if (m.name and not m.content.startswith("[")) else ""
+                trailing_obs.append(f"{prefix}{m.content}")
+            trailing_obs.reverse()
+            return GenerationOutput(
+                message=ChatMessage(
+                    role="assistant",
+                    content="\n\n".join(trailing_obs),
+                    reasoning=f"Synthesized tool observations on {self.tier} ({telemetry.profile}).",
+                ),
+                telemetry=telemetry,
+            )
 
         last_user = next(
             (m.content for m in reversed(messages) if m.role == "user"),
@@ -225,8 +257,22 @@ class DeterministicReplayBackend:
         )
 
 
+def _post_json(url: str, payload: dict[str, Any], api_key: str, timeout: float) -> dict[str, Any]:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return dict(json.loads(resp.read().decode("utf-8")))
+
+
 class OpenAICompatibleBackend:
-    """HTTP client backend for on-device llama-server (Termux), Ollama, vLLM, or OpenAI endpoints."""
+    """HTTP client backend for on-device llama-server (Termux), Ollama, vLLM, or OpenAI endpoints with live logprobs routing."""
 
     def __init__(
         self,
@@ -249,9 +295,32 @@ class OpenAICompatibleBackend:
         tools: list[dict[str, Any]] | None = None,
         constrain_schema: bool = False,
     ) -> GenerationOutput:
-        from pocket_genie.quant.enforcer import build_tool_call_schema
+        import urllib.error
 
-        out_messages = [m.to_dict() for m in messages]
+        from pocket_genie.quant.enforcer import build_tool_call_schema
+        from pocket_genie.quant.entropy_router import TokenPrecisionRouter
+
+        out_messages: list[dict[str, Any]] = []
+        for m in messages:
+            d: dict[str, Any] = {"role": m.role, "content": m.content}
+            if m.role == "tool":
+                d["tool_call_id"] = m.tool_call_id or "call_0"
+                if m.name:
+                    d["name"] = m.name
+            elif m.role == "assistant" and m.tool_calls:
+                d["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments),
+                        },
+                    }
+                    for tc in m.tool_calls
+                ]
+            out_messages.append(d)
+
         if tools and constrain_schema:
             schema = build_tool_call_schema(tools)
             out_messages.append(
@@ -268,6 +337,8 @@ class OpenAICompatibleBackend:
             "model": self.model,
             "messages": out_messages,
             "temperature": 0.0,
+            "logprobs": True,
+            "top_logprobs": 5,
         }
         if tools:
             payload["tools"] = tools
@@ -280,21 +351,22 @@ class OpenAICompatibleBackend:
                 },
             }
 
+        endpoint = f"{self.base_url}/chat/completions"
         t0 = time.perf_counter()
-        req = urllib.request.Request(
-            f"{self.base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        try:
+            body = _post_json(endpoint, payload, self.api_key, self.timeout)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (400, 422):
+                fallback_payload = {
+                    k: v for k, v in payload.items() if k not in ("logprobs", "top_logprobs", "response_format")
+                }
+                body = _post_json(endpoint, fallback_payload, self.api_key, self.timeout)
+            else:
+                raise
         elapsed = max(1e-3, time.perf_counter() - t0)
 
-        choice = body["choices"][0]["message"]
+        choice_obj = body["choices"][0]
+        choice = choice_obj["message"]
         content = choice.get("content") or ""
         invocations: list[ToolInvocation] = []
         for idx, tc in enumerate(choice.get("tool_calls") or []):
@@ -316,15 +388,29 @@ class OpenAICompatibleBackend:
         profile_map = {"t1": "P_fast", "t2": "P_mixed", "t3": "P_accurate"}
         act_bits_map = {"t1": 8.0, "t2": 8.24, "t3": 16.0}
 
-        msg = ChatMessage(
-            role="assistant",
-            content="" if invocations else content,
-            reasoning=f"Generated by `{self.model}` ({comp_tokens} tokens in {elapsed:.2f}s).",
-            tool_calls=invocations,
-        )
-        return GenerationOutput(
-            message=msg,
-            telemetry=QuantTelemetrySnapshot(
+        router = TokenPrecisionRouter()
+        logprobs_block = choice_obj.get("logprobs") or {}
+        token_entries = logprobs_block.get("content") or []
+        for step_idx, entry in enumerate(token_entries):
+            top_lp = entry.get("top_logprobs") or []
+            vals = [float(item["logprob"]) for item in top_lp if "logprob" in item]
+            if not vals and "logprob" in entry:
+                vals = [float(entry["logprob"]), float(entry["logprob"]) - 2.5]
+            if vals:
+                router.evaluate_step(step_idx, vals)
+
+        if router.decisions:
+            telemetry = router.build_telemetry(prefix_kv_hit=True)
+            if self.tier == "t3":
+                telemetry.tier = "t3"
+                telemetry.profile = "P_accurate"
+                telemetry.effective_act_bits = 16.0
+            elif self.tier == "t2":
+                telemetry.tier = "t2"
+                telemetry.profile = "P_mixed"
+                telemetry.effective_act_bits = max(8.24, telemetry.effective_act_bits)
+        else:
+            telemetry = QuantTelemetrySnapshot(
                 tier=self.tier,
                 profile=profile_map[self.tier],  # type: ignore[arg-type]
                 weight_bits=4.0,
@@ -332,8 +418,15 @@ class OpenAICompatibleBackend:
                 promoted_tokens=comp_tokens if self.tier != "t1" else 0,
                 total_tokens=comp_tokens,
                 prefix_kv_hit=True,
-            ),
+            )
+
+        msg = ChatMessage(
+            role="assistant",
+            content="" if invocations else content,
+            reasoning=f"Generated by `{self.model}` ({comp_tokens} tokens in {elapsed:.2f}s).",
+            tool_calls=invocations,
         )
+        return GenerationOutput(message=msg, telemetry=telemetry)
 
 
 class BackendRegistry:
@@ -345,6 +438,7 @@ class BackendRegistry:
             "t2": DeterministicReplayBackend(tier="t2"),
             "t3": DeterministicReplayBackend(tier="t3"),
         }
+        self.hf_runtime: Any | None = None
 
     def configure_local_llm(
         self,
@@ -356,6 +450,28 @@ class BackendRegistry:
         self._backends["t1"] = OpenAICompatibleBackend(base_url=base_url, model=primary_model, tier="t1")
         self._backends["t2"] = OpenAICompatibleBackend(base_url=base_url, model=primary_model, tier="t2")
         self._backends["t3"] = OpenAICompatibleBackend(base_url=base_url, model=fb, tier="t3")
+
+    def configure_hf_quant(
+        self,
+        model_id: str = "Qwen/Qwen2.5-0.5B-Instruct",
+        device: str | None = None,
+        weight_bits: int = 4,
+        apply_smoothquant: bool = True,
+        max_new_tokens: int = 96,
+    ) -> Any:
+        from pocket_genie.quant.hf_backend import QuantizedPyTorchBackend, SharedHFQuantRuntime
+
+        runtime = SharedHFQuantRuntime.load(
+            model_id=model_id,
+            device=device,
+            weight_bits=weight_bits,
+            apply_smoothquant=apply_smoothquant,
+        )
+        self.hf_runtime = runtime
+        self._backends["t1"] = QuantizedPyTorchBackend(runtime, tier="t1", max_new_tokens=max_new_tokens)
+        self._backends["t2"] = QuantizedPyTorchBackend(runtime, tier="t2", max_new_tokens=max_new_tokens)
+        self._backends["t3"] = QuantizedPyTorchBackend(runtime, tier="t3", max_new_tokens=max_new_tokens)
+        return runtime
 
     def register(self, tier: PrecisionTier, backend: ModelBackend) -> None:
         self._backends[tier] = backend

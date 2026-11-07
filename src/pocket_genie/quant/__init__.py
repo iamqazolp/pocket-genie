@@ -4,7 +4,9 @@ from pocket_genie.quant.enforcer import (
     COMPACT_ALPHABET,
     FastJsonSchemaParser,
     FastSequenceParser,
+    build_fast_tokenizer_data,
     build_tool_call_schema,
+    create_schema_token_enforcer,
 )
 from pocket_genie.quant.entropy_router import (
     TokenPrecisionRouter,
@@ -15,6 +17,12 @@ from pocket_genie.quant.fake_quant import (
     attach_per_layer_activation_hooks,
     fake_quantize_activation_asymmetric,
     fake_quantize_weight_per_channel,
+)
+from pocket_genie.quant.hf_backend import (
+    HF_QUANT_AVAILABLE,
+    QuantizedPyTorchBackend,
+    SharedHFQuantRuntime,
+    calibrate_layer_sensitivities,
 )
 from pocket_genie.quant.kv_cache import (
     BOSSinkINT4KVCache,
@@ -42,16 +50,22 @@ __all__ = [
     "DEFAULT_OUTLIER_DOWN_PROJ_LAYERS",
     "FastJsonSchemaParser",
     "FastSequenceParser",
+    "HF_QUANT_AVAILABLE",
     "KVCompressionStats",
     "LayerSensitivity",
     "PrecisionProfile",
+    "QuantizedPyTorchBackend",
+    "SharedHFQuantRuntime",
     "TokenPrecisionRouter",
     "TokenStepDecision",
     "attach_per_layer_activation_hooks",
+    "build_fast_tokenizer_data",
     "build_sensitivity_profiles",
     "build_tool_call_schema",
+    "calibrate_layer_sensitivities",
     "compute_margin_and_entropy",
     "compute_smooth_scale",
+    "create_schema_token_enforcer",
     "fake_quantize_activation_asymmetric",
     "fake_quantize_weight_per_channel",
     "migrate_swiglu_down_proj_scale",

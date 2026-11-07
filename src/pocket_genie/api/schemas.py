@@ -170,5 +170,11 @@ def build_openapi_spec() -> dict[str, Any]:
                     "operationId": "resetSession",
                 }
             },
+            "/api/v1/traces": {
+                "get": {
+                    "summary": "Inspect recent Langfuse execution traces, spans, guardrail events, and quantization scores.",
+                    "operationId": "listTraces",
+                }
+            },
         },
     }

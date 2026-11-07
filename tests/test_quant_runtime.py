@@ -74,11 +74,41 @@ def test_build_tool_call_schema_anyof():
     assert len(schema["anyOf"]) == 2
 
 
+def test_fast_json_schema_parser_steps_through_freetext_string():
+    import pytest
+
+    pytest.importorskip("lmformatenforcer")
+    from pocket_genie.quant import FastJsonSchemaParser
+
+    schema = build_tool_call_schema(
+        [
+            {
+                "function": {
+                    "name": "kb.search_workspace",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                }
+            }
+        ]
+    )
+    parser = FastJsonSchemaParser(schema)
+    sample = '{"name": "kb.search_workspace", "arguments": {"query": "SmoothQuant"}}'
+    for ch in sample:
+        _ = parser.shortcut_key()
+        _ = parser.cache_key()
+        parser = parser.add_character(ch)
+    assert parser.can_end() is True
+
+
 def test_pytorch_smoothquant_and_selective_layer_hooks():
     import pytest
 
     torch = pytest.importorskip("torch")
     import torch.nn as nn
+
     from pocket_genie.quant import (
         attach_per_layer_activation_hooks,
         migrate_swiglu_down_proj_scale,
@@ -125,4 +155,77 @@ def test_pytorch_smoothquant_and_selective_layer_hooks():
     assert len(k_deq) == 12
     assert len(v_deq) == 12
     assert k_mse >= 0.0 and v_mse >= 0.0
+
+
+def test_quantized_pytorch_backend_kurtosis_calibration_and_generation():
+    import pytest
+
+    torch = pytest.importorskip("torch")
+    transformers = pytest.importorskip("transformers")
+
+    from pocket_genie.quant import (
+        BOSSinkINT4KVCache,
+        QuantizedPyTorchBackend,
+        SharedHFQuantRuntime,
+        build_sensitivity_profiles,
+        calibrate_layer_sensitivities,
+    )
+    from pocket_genie.shared import ChatMessage
+
+    cfg = transformers.Qwen2Config(
+        vocab_size=256,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+    )
+    tiny_model = transformers.Qwen2ForCausalLM(cfg).eval()
+
+    class TinyDummyTokenizer:
+        eos_token_id = 2
+        all_special_ids = [0, 1, 2]
+
+        def __len__(self) -> int:
+            return 256
+
+        def __call__(self, text: str, return_tensors: str = "pt", **kwargs):
+            ids = [min(255, max(3, ord(ch) % 250)) for ch in text[:32]] or [10, 11, 12]
+            return {"input_ids": torch.tensor([ids], dtype=torch.long)}
+
+        def apply_chat_template(self, messages, tokenize: bool = False, add_generation_prompt: bool = True):
+            return "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+
+        def decode(self, token_ids, skip_special_tokens: bool = False) -> str:
+            return "".join(chr(65 + (int(t) % 26)) for t in token_ids)
+
+    tok = TinyDummyTokenizer()
+    sens, act_max = calibrate_layer_sensitivities(
+        tiny_model,
+        tok,
+        calibration_texts=("calibrate one", "calibrate two"),
+        device="cpu",
+    )
+    assert len(sens) > 0
+    assert len(act_max) == 2
+
+    profiles = build_sensitivity_profiles(sens, kurtosis_threshold=1.0, total_linear_layers=len(sens))
+    kv = BOSSinkINT4KVCache(num_layers=2, num_kv_heads=2, head_dim=8)
+    rt = SharedHFQuantRuntime(
+        model_id="tiny-qwen2-unit",
+        device="cpu",
+        tokenizer=tok,
+        model=tiny_model,
+        profiles=profiles,
+        sensitivities=sens,
+        kv_cache=kv,
+        weight_footprint_mb=0.5,
+        tokenizer_enforcer_data=None,
+    )
+    backend = QuantizedPyTorchBackend(rt, tier="t1", max_new_tokens=6, enable_token_promotion=True)
+    out = backend.generate([ChatMessage(role="user", content="Hello tiny model")])
+    assert out.telemetry.total_tokens > 0
+    assert out.telemetry.weight_footprint_mb == 0.5
+    assert len(out.message.content) > 0
+
 
