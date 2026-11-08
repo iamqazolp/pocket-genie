@@ -19,6 +19,63 @@ _INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(drop\s+table|rm\s+-rf\s+/|exfiltrate\s+secret)", re.IGNORECASE),
 )
 
+_SECURITY_HAZARD_PATTERNS: tuple[re.Pattern[str], ...] = (
+    *_INJECTION_PATTERNS,
+    re.compile(r"rm\s+-rf\b", re.IGNORECASE),
+    re.compile(r"\b(eval|exec)\s*\(", re.IGNORECASE),
+    re.compile(r"os\.system\s*\(", re.IGNORECASE),
+    re.compile(r"shell\s*=\s*True", re.IGNORECASE),
+    re.compile(r"\.\./\.\./|/etc/passwd", re.IGNORECASE),
+    re.compile(r"(api_key|secret|password|token)\s*=\s*['\"][A-Za-z0-9_\-]{8,}['\"]", re.IGNORECASE),
+)
+
+_BREAKING_RISK_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"rm\s+-rf\b", re.IGNORECASE),
+    re.compile(r"\b(eval|exec)\s*\(", re.IGNORECASE),
+    re.compile(r"\b(SyntaxError|ZeroDivisionError)\b", re.IGNORECASE),
+    re.compile(r"1\s*/\s*0", re.IGNORECASE),
+    re.compile(r"breaking\s+change", re.IGNORECASE),
+)
+
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "that",
+        "this",
+        "from",
+        "into",
+        "whether",
+        "does",
+        "are",
+        "was",
+        "were",
+        "has",
+        "have",
+        "had",
+        "any",
+        "all",
+        "can",
+        "will",
+        "introduces",
+        "input",
+        "state",
+        "diff",
+    }
+)
+
+_VALID_QUESTION_TYPES: frozenset[str] = frozenset({"noul", "choice", "score"})
+
+
+def _tokenize_words(text: str) -> set[str]:
+    return {
+        tok
+        for tok in re.findall(r"[a-z0-9_]+", text.lower())
+        if len(tok) >= 2 and tok not in _STOPWORDS
+    }
+
 _MUTATING_KEYWORDS: tuple[str, ...] = (
     "patch",
     "commit",
@@ -266,3 +323,208 @@ class JevDecisionClient:
             output_tokens=out_toks,
             cost_usd=cost_usd,
         )
+
+    @staticmethod
+    def _validate_questions(questions: dict[str, dict[str, Any]]) -> None:
+        if not isinstance(questions, dict) or not questions:
+            raise ValueError("questions must be a non-empty dictionary mapping question IDs to specifications.")
+        for q_id, q_spec in questions.items():
+            if not isinstance(q_spec, dict):
+                raise ValueError(f"Question {q_id!r} specification must be a dictionary.")
+            q_type = q_spec.get("type")
+            if q_type not in _VALID_QUESTION_TYPES:
+                raise ValueError(
+                    f"Question {q_id!r} has invalid type {q_type!r}; must be one of {sorted(_VALID_QUESTION_TYPES)}."
+                )
+            if q_type == "choice":
+                criteria = q_spec.get("criteria")
+                if not isinstance(criteria, dict) or not criteria:
+                    raise ValueError(f"Choice question {q_id!r} requires a non-empty 'criteria' dict.")
+            elif q_type == "score":
+                criteria = q_spec.get("criteria")
+                if not isinstance(criteria, list) or not criteria:
+                    raise ValueError(f"Score question {q_id!r} requires a non-empty 'criteria' list.")
+
+    def _local_decide_fallback(
+        self,
+        state: Any,
+        questions: dict[str, dict[str, Any]],
+        t0: float,
+    ) -> dict[str, Any]:
+        state_text = json.dumps(state, ensure_ascii=False) if isinstance(state, (dict, list)) else str(state)
+        state_lower = state_text.lower()
+        state_tokens = _tokenize_words(state_text)
+
+        sec_hits = sum(1 for pat in _SECURITY_HAZARD_PATTERNS if pat.search(state_text))
+        brk_hits = sum(1 for pat in _BREAKING_RISK_PATTERNS if pat.search(state_text))
+
+        answers: dict[str, dict[str, Any]] = {}
+        for q_id, q_spec in questions.items():
+            q_type = str(q_spec["type"])
+            q_id_lower = q_id.lower()
+
+            if q_type == "noul":
+                instructions = str(q_spec.get("instructions") or "")
+                inst_lower = instructions.lower()
+                inst_tokens = _tokenize_words(instructions)
+                is_security_q = any(
+                    w in inst_lower or w in q_id_lower
+                    for w in ("security", "hazard", "injection", "traversal", "secret", "bypass", "sabotage")
+                )
+                is_breaking_q = any(
+                    w in inst_lower or w in q_id_lower
+                    for w in ("breaking", "syntax error", "exception", "unhandled", "regression", "crash")
+                )
+
+                if is_security_q:
+                    if sec_hits > 0:
+                        prob = round(min(0.96, 0.82 + 0.07 * sec_hits), 4)
+                    else:
+                        prob = 0.04
+                elif is_breaking_q:
+                    if brk_hits > 0 or sec_hits > 0:
+                        prob = round(min(0.95, 0.78 + 0.08 * (brk_hits + sec_hits)), 4)
+                    else:
+                        prob = 0.05
+                else:
+                    overlap = len(inst_tokens & state_tokens)
+                    if overlap > 0:
+                        ratio = overlap / max(1, min(len(inst_tokens), 5))
+                        prob = round(min(0.96, max(0.58, 0.45 + 0.48 * ratio)), 4)
+                    elif sec_hits > 0 and "risk" in inst_lower:
+                        prob = 0.88
+                    else:
+                        prob = 0.05
+
+                prob = max(0.03, min(0.96, prob))
+                answers[q_id] = {
+                    "type": "noul",
+                    "noul": prob,
+                    "probabilities": {"true": prob, "false": round(1.0 - prob, 4)},
+                }
+
+            elif q_type == "choice":
+                criteria_map: dict[str, Any] = dict(q_spec.get("criteria") or {})
+                weights: dict[str, float] = {}
+                for opt_key, desc in criteria_map.items():
+                    opt_tokens = _tokenize_words(f"{opt_key} {desc}")
+                    overlap = len(opt_tokens & state_tokens)
+                    key_prefix = str(opt_key).lower().split("_")[0]
+                    direct_bonus = 0.85 if (len(key_prefix) >= 3 and key_prefix in state_lower) else 0.0
+                    weights[str(opt_key)] = 0.15 + 1.25 * overlap + direct_bonus
+
+                total_w = sum(weights.values()) or 1.0
+                probs = {k: round(v / total_w, 4) for k, v in weights.items()}
+                winner = max(probs, key=lambda k: probs[k])
+                sorted_vals = sorted(probs.values(), reverse=True)
+                gap = sorted_vals[0] - sorted_vals[1] if len(sorted_vals) > 1 else sorted_vals[0]
+                conf = round(min(0.99, max(0.35, sorted_vals[0] + 0.35 * gap)), 4)
+                answers[q_id] = {
+                    "type": "choice",
+                    "choice": winner,
+                    "confidence": conf,
+                    "probabilities": probs,
+                }
+
+            elif q_type == "score":
+                rubric: list[Any] = list(q_spec.get("criteria") or [])
+                n_levels = len(rubric)
+                rubric_text = " ".join(str(item).lower() for item in rubric)
+                is_quality_rubric = "quality" in q_id_lower or (
+                    "clean" in rubric_text and ("risky" in rubric_text or "untested" in rubric_text)
+                )
+
+                if is_quality_rubric:
+                    if sec_hits > 0 or brk_hits > 0:
+                        idx = 0
+                        score = 0.08
+                    elif any(tok in state_text for tok in ("->", ": int", ": str", ": float", "def ", "return ")):
+                        idx = n_levels - 1
+                        score = 0.88
+                    else:
+                        idx = max(0, (n_levels - 1) // 2)
+                        score = 0.62
+                else:
+                    level_hits = [len(_tokenize_words(str(item)) & state_tokens) for item in rubric]
+                    max_hits = max(level_hits, default=0)
+                    if max_hits > 0:
+                        idx = max(range(n_levels), key=lambda i: (level_hits[i], i))
+                    elif len(state_text) >= 220:
+                        idx = n_levels - 1
+                    elif len(state_text) >= 80:
+                        idx = min(1, n_levels - 1)
+                    else:
+                        idx = 0
+                    score = round(idx / max(1, n_levels - 1), 4) if n_levels > 1 else 0.5
+                    score = max(0.08, min(0.94, score))
+
+                answers[q_id] = {
+                    "type": "score",
+                    "score": round(score, 4),
+                    "rubric_index": idx,
+                }
+
+        return {
+            "model": f"{self.model}:offline",
+            "source": "local_calibrated",
+            "answers": answers,
+            "latency_ms": round((time.perf_counter() - t0) * 1000.0, 2),
+            "usage": {"input_tokens": 0, "output_tokens": 0, "cost": 0.0},
+        }
+
+    def decide(self, state: Any, questions: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        """Execute a general-purpose System-One Jev Decisions query across noul, choice, and score questions."""
+        self._validate_questions(questions)
+        t0 = time.perf_counter()
+        key = self._resolve_api_key()
+        if not key and self._transport is None:
+            return self._local_decide_fallback(state, questions, t0)
+
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "state": state,
+            "questions": questions,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key or 'sk-or-test'}",
+        }
+
+        try:
+            post_fn = self._transport or self._default_post
+            body = post_fn(self.endpoint, payload, headers, self.timeout)
+        except Exception:
+            return self._local_decide_fallback(state, questions, t0)
+
+        raw_answers = body.get("answers") or {}
+        normalized_answers: dict[str, dict[str, Any]] = {}
+        for q_id, q_spec in questions.items():
+            q_type = str(q_spec["type"])
+            ans = dict(raw_answers.get(q_id) or {})
+            ans["type"] = q_type
+            if q_type == "noul":
+                prob = round(_extract_noul(ans), 4)
+                ans["noul"] = prob
+                if "probabilities" not in ans:
+                    ans["probabilities"] = {"true": prob, "false": round(1.0 - prob, 4)}
+            elif q_type == "choice":
+                probs = {str(k): round(float(v), 4) for k, v in (ans.get("probabilities") or {}).items()}
+                criteria_keys = list((q_spec.get("criteria") or {}).keys())
+                default_choice = str(criteria_keys[0]) if criteria_keys else ""
+                choice = str(ans.get("choice") or (max(probs, key=lambda k: probs[k]) if probs else default_choice))
+                conf = round(float(ans.get("confidence") or (max(probs.values()) if probs else 0.5)), 4)
+                ans["choice"] = choice
+                ans["confidence"] = conf
+                ans["probabilities"] = probs
+            elif q_type == "score":
+                ans["score"] = round(_extract_score(ans), 4)
+            normalized_answers[q_id] = ans
+
+        usage = dict(body.get("usage") or {})
+        return {
+            "model": str(body.get("model") or self.model),
+            "source": "openrouter",
+            "answers": normalized_answers,
+            "latency_ms": round((time.perf_counter() - t0) * 1000.0, 2),
+            "usage": usage,
+        }

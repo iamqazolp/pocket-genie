@@ -9,6 +9,7 @@ from pocket_genie.registry.tools import ToolRegistry
 from pocket_genie.retrieval.hybrid_store import HybridKnowledgeStore
 from pocket_genie.tools.device_termux import register_device_tools
 from pocket_genie.tools.devops import register_devops_tools
+from pocket_genie.tools.jev_tools import register_jev_tools
 from pocket_genie.tools.memory_tools import register_memory_and_kb_tools
 from pocket_genie.tools.sql_workspace import WorkspaceSQLStore, register_sql_tools
 from pocket_genie.tools.visualization import register_visualization_tools
@@ -33,12 +34,14 @@ def register_all_builtin_tools(
     dev_state = register_device_tools(registry)
     register_visualization_tools(registry)
     register_memory_and_kb_tools(registry, mem, skills, kb)
+    jev_client = register_jev_tools(registry)
     return {
         "memory_store": mem,
         "skill_registry": skills,
         "kb_store": kb,
         "sql_store": sql,
         "device_state": dev_state,
+        "jev_client": jev_client,
     }
 
 
@@ -47,6 +50,7 @@ __all__ = [
     "register_all_builtin_tools",
     "register_device_tools",
     "register_devops_tools",
+    "register_jev_tools",
     "register_memory_and_kb_tools",
     "register_sql_tools",
     "register_visualization_tools",

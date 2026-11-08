@@ -21,12 +21,12 @@ SPECIALIST_ROSTER: dict[str, SpecialistConfig] = {
     "devops_agent": SpecialistConfig(
         agent_id="devops_agent",
         display_name="DevOps & Repository Specialist",
-        description="Inspects git status/diffs, reads code chunks, runs pytest suites, and proposes patches.",
-        tool_domains=("devops",),
+        description="Lists files, searches code, inspects git status/diffs/logs, reads chunks, runs pytest, and applies patches.",
+        tool_domains=("devops", "jev"),
         default_tier="t1",
         system_prompt=(
-            "You are the DevOps & Repository Specialist. Inspect git status, diffs, and targeted file chunks "
-            "before proposing minimal patches."
+            "You are the DevOps & Repository Specialist. Search code, list files, and inspect git status/diffs/logs "
+            "before proposing minimal patches or running TypeSafe Jev patch audits."
         ),
     ),
     "knowledge_base_agent": SpecialistConfig(
@@ -43,41 +43,41 @@ SPECIALIST_ROSTER: dict[str, SpecialistConfig] = {
     "sql_agent": SpecialistConfig(
         agent_id="sql_agent",
         display_name="SQL & Experiment Analytics Specialist",
-        description="Runs read-only allowlist-validated SQL queries over quantization tables, taxonomies, and CSVs.",
+        description="Loads workspace CSV/JSONL/SQLite datasets and runs read-only allowlisted SQL queries and charts.",
         tool_domains=("sql", "visualization"),
         default_tier="t2",
         system_prompt=(
-            "You are the SQL Analytics Specialist. Execute read-only SELECT queries against allowlisted tables "
-            "(ablation_results, failure_taxonomy, layer_telemetry, session_events) and summarize numeric findings."
+            "You are the SQL Analytics Specialist. Load workspace datasets via `sql.load_dataset` or execute read-only "
+            "SELECT queries against allowlisted tables and summarize numeric findings."
         ),
     ),
     "device_agent": SpecialistConfig(
         agent_id="device_agent",
-        display_name="Edge Device & Termux Specialist",
-        description="Queries Android Termux hardware APIs (battery, notifications, clipboard, TTS) and host telemetry.",
+        display_name="Edge Device & OS Bridge Specialist",
+        description="Queries macOS/Linux/Android Termux battery, RAM/CPU telemetry, top processes, clipboard, and notifications.",
         tool_domains=("device",),
         default_tier="t1",
         system_prompt=(
-            "You are the Edge Device & Termux Specialist. Monitor host/mobile telemetry and dispatch notifications "
-            "or clipboard updates safely."
+            "You are the Edge Device & OS Bridge Specialist. Monitor host/mobile telemetry, inspect top processes, "
+            "and manage clipboard or notifications safely."
         ),
     ),
     "red_teaming_agent": SpecialistConfig(
         agent_id="red_teaming_agent",
         display_name="Red-Teaming & Quantization Fault Specialist",
-        description="Executes adversarial schema probes, activation outlier stress tests, and fallback verification.",
-        tool_domains=("sql", "kb"),
+        description="Executes adversarial schema probes, Jev structured decisions, activation outlier stress tests, and fallback verification.",
+        tool_domains=("sql", "kb", "jev"),
         default_tier="t2",
         system_prompt=(
             "You are the Red-Teaming & Quantization Fault Specialist. Stress-test tool schemas, outlier-sensitive "
-            "layers, and fallback tier transitions."
+            "layers, TypeSafe Jev structured decisions, and fallback tier transitions."
         ),
     ),
     "run_assistant_agent": SpecialistConfig(
         agent_id="run_assistant_agent",
         display_name="Workflow & Run Assistant",
         description="Monitors quantization runs, CI pipelines, and benchmark quality gates.",
-        tool_domains=("devops", "sql", "device"),
+        tool_domains=("devops", "sql", "device", "jev"),
         default_tier="t1",
         system_prompt=(
             "You are the Run Assistant. Inspect experiment metrics, test suites, and system health to report "
