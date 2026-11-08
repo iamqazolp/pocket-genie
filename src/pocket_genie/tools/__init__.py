@@ -11,6 +11,7 @@ from pocket_genie.tools.device_termux import register_device_tools
 from pocket_genie.tools.devops import register_devops_tools
 from pocket_genie.tools.jev_tools import register_jev_tools
 from pocket_genie.tools.memory_tools import register_memory_and_kb_tools
+from pocket_genie.tools.personal_hub import PersonalHubStore, register_personal_tools
 from pocket_genie.tools.sql_workspace import WorkspaceSQLStore, register_sql_tools
 from pocket_genie.tools.visualization import register_visualization_tools
 
@@ -22,6 +23,7 @@ def register_all_builtin_tools(
     skill_registry: SkillRegistry | None = None,
     kb_store: HybridKnowledgeStore | None = None,
     sql_store: WorkspaceSQLStore | None = None,
+    personal_store: PersonalHubStore | None = None,
 ) -> dict[str, Any]:
     mem = memory_store or SessionMemoryStore()
     skills = skill_registry or SkillRegistry()
@@ -35,6 +37,7 @@ def register_all_builtin_tools(
     register_visualization_tools(registry)
     register_memory_and_kb_tools(registry, mem, skills, kb)
     jev_client = register_jev_tools(registry)
+    personal = register_personal_tools(registry, workspace_dir, store=personal_store, jev_client=jev_client)
     return {
         "memory_store": mem,
         "skill_registry": skills,
@@ -42,16 +45,5 @@ def register_all_builtin_tools(
         "sql_store": sql,
         "device_state": dev_state,
         "jev_client": jev_client,
+        "personal_store": personal,
     }
-
-
-__all__ = [
-    "WorkspaceSQLStore",
-    "register_all_builtin_tools",
-    "register_device_tools",
-    "register_devops_tools",
-    "register_jev_tools",
-    "register_memory_and_kb_tools",
-    "register_sql_tools",
-    "register_visualization_tools",
-]

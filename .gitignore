@@ -16,4 +16,5 @@ venv/
 .DS_Store
 .local-notes/
 *.db
+*.db-*
 *.sqlite3
