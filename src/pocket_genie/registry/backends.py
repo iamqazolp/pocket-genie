@@ -105,9 +105,16 @@ class DeterministicReplayBackend:
             args: dict[str, Any] = {}
             props = chosen.get("parameters", {}).get("properties", {})
             if "query" in props:
-                args["query"] = last_user or "status"
+                if first_tool == "sql.query_workspace" and not last_user.strip().upper().startswith(("SELECT", "WITH")):
+                    args["query"] = "SELECT * FROM ablation_results LIMIT 5"
+                else:
+                    args["query"] = last_user or "status"
             elif "task" in props:
                 args["task"] = last_user or "inspect workspace"
+            elif "name" in props:
+                args["name"] = "quant-diagnosis"
+            elif "path" in props:
+                args["path"] = "README.md"
             raw_json = json.dumps(args)
             mid = max(1, len(raw_json) // 2)
             chunks = [
