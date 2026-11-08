@@ -17,6 +17,20 @@ _FORBIDDEN_SQL_RE = re.compile(
     re.IGNORECASE,
 )
 
+DYNAMIC_SQL_TABLES: set[str] = set()
+
+
+def register_dynamic_sql_table(table_name: str) -> None:
+    """Register a dynamically loaded workspace SQL table in the runtime allowlist."""
+    cleaned = table_name.strip().lower()
+    if cleaned:
+        DYNAMIC_SQL_TABLES.add(cleaned)
+
+
+def clear_dynamic_sql_tables() -> None:
+    """Clear all dynamically registered SQL tables."""
+    DYNAMIC_SQL_TABLES.clear()
+
 
 class ProjectScopedToolsMiddleware(BaseMiddleware):
     """Filters out project-scoped or mutating tools when session context lacks project authorization."""
@@ -75,9 +89,12 @@ class SQLTableAllowlistMiddleware(BaseMiddleware):
             self._custom_allowed
             if self._custom_allowed is not None
             else (
-                self._demo_tables
-                if ctx.shared.agent_type == "scoped-demo"
-                else self._all_tables
+                (
+                    self._demo_tables
+                    if ctx.shared.agent_type == "scoped-demo"
+                    else self._all_tables
+                )
+                | DYNAMIC_SQL_TABLES
             )
         )
         referenced = {m.group(1).lower() for m in _SQL_TABLE_RE.finditer(query)}
