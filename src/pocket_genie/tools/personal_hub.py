@@ -73,7 +73,7 @@ class PersonalHubStore:
             )
 
     def add_deadline(self, title: str, due_at: str, priority: str = "medium") -> dict[str, Any]:
-        now = dt.datetime.utcnow().isoformat()
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
         with self.conn:
             c = self.conn.execute(
                 "INSERT INTO deadlines (title, due_at, priority, completed, created_at) VALUES (?, ?, ?, 0, ?)",
@@ -93,7 +93,7 @@ class PersonalHubStore:
             return self.conn.execute("UPDATE deadlines SET completed = 1 WHERE id = ?", (deadline_id,)).rowcount > 0
 
     def add_event(self, title: str, start_at: str, end_at: str | None = None, location: str | None = None) -> dict[str, Any]:
-        now = dt.datetime.utcnow().isoformat()
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
         with self.conn:
             c = self.conn.execute(
                 "INSERT INTO schedule_events (title, start_at, end_at, location, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -114,7 +114,7 @@ class PersonalHubStore:
         draft_reply: str,
         status: str = "pending",
     ) -> dict[str, Any]:
-        now = dt.datetime.utcnow().isoformat()
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
         with self.conn:
             c = self.conn.execute(
                 "INSERT INTO message_queue (sender, body, urgency, tone, priority_score, draft_reply, status, created_at) "
