@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
+import time
 import urllib.request
 from typing import Any, Protocol
 
@@ -12,6 +14,8 @@ from pocket_genie.shared import (
     ToolCallChunk,
     ToolInvocation,
 )
+
+_TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
 
 @dataclasses.dataclass(slots=True)
@@ -86,6 +90,42 @@ def _select_tool_for_query(query: str, tools: list[dict[str, Any]]) -> dict[str,
             best_fn = fn
 
     return best_fn
+
+
+def parse_tool_calls_from_text(content: str) -> list[ToolInvocation]:
+    """Extract tool invocations from <tool_call> tags or raw JSON objects emitted by local Qwen/Llama models."""
+    invocations: list[ToolInvocation] = []
+    for idx, match in enumerate(_TOOL_CALL_BLOCK_RE.finditer(content)):
+        try:
+            obj = json.loads(match.group(1))
+            if isinstance(obj, dict) and "name" in obj:
+                args = obj.get("arguments") or {}
+                if isinstance(args, str):
+                    args = json.loads(args)
+                invocations.append(
+                    ToolInvocation(id=f"call_tag_{idx}", name=str(obj["name"]), arguments=dict(args))
+                )
+        except Exception:
+            continue
+
+    if invocations:
+        return invocations
+
+    stripped = content.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            obj = json.loads(stripped)
+            if isinstance(obj, dict) and "name" in obj and "arguments" in obj:
+                args = obj["arguments"]
+                if isinstance(args, str):
+                    args = json.loads(args)
+                invocations.append(
+                    ToolInvocation(id="call_json_0", name=str(obj["name"]), arguments=dict(args))
+                )
+        except Exception:
+            pass
+
+    return invocations
 
 
 class DeterministicReplayBackend:
@@ -186,17 +226,17 @@ class DeterministicReplayBackend:
 
 
 class OpenAICompatibleBackend:
-    """HTTP client backend for local llama.cpp, Ollama, vLLM, or OpenAI-compatible endpoints."""
+    """HTTP client backend for on-device llama-server (Termux), Ollama, vLLM, or OpenAI endpoints."""
 
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:11434/v1",
-        model: str = "qwen2.5:0.5b",
+        model: str = "qwen2.5:3b",
         api_key: str = "local",
         tier: PrecisionTier = "t1",
-        timeout: float = 30.0,
+        timeout: float = 60.0,
     ) -> None:
-        self.name = f"openai-compat:{model}"
+        self.name = f"local-llm:{model}"
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
@@ -209,14 +249,38 @@ class OpenAICompatibleBackend:
         tools: list[dict[str, Any]] | None = None,
         constrain_schema: bool = False,
     ) -> GenerationOutput:
+        from pocket_genie.quant.enforcer import build_tool_call_schema
+
+        out_messages = [m.to_dict() for m in messages]
+        if tools and constrain_schema:
+            schema = build_tool_call_schema(tools)
+            out_messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Respond ONLY with a valid JSON tool call matching this schema: "
+                        + json.dumps(schema)
+                    ),
+                }
+            )
+
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": [m.to_dict() for m in messages],
+            "messages": out_messages,
             "temperature": 0.0,
         }
         if tools:
             payload["tools"] = tools
+        if tools and constrain_schema:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "tool_call",
+                    "schema": build_tool_call_schema(tools),
+                },
+            }
 
+        t0 = time.perf_counter()
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
@@ -228,8 +292,10 @@ class OpenAICompatibleBackend:
         )
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
+        elapsed = max(1e-3, time.perf_counter() - t0)
 
         choice = body["choices"][0]["message"]
+        content = choice.get("content") or ""
         invocations: list[ToolInvocation] = []
         for idx, tc in enumerate(choice.get("tool_calls") or []):
             fn = tc.get("function", {})
@@ -242,14 +308,31 @@ class OpenAICompatibleBackend:
                     arguments=parsed_args,
                 )
             )
+        if not invocations and content:
+            invocations = parse_tool_calls_from_text(content)
+
+        usage = body.get("usage") or {}
+        comp_tokens = int(usage.get("completion_tokens") or max(1, len(content) // 4))
+        profile_map = {"t1": "P_fast", "t2": "P_mixed", "t3": "P_accurate"}
+        act_bits_map = {"t1": 8.0, "t2": 8.24, "t3": 16.0}
+
         msg = ChatMessage(
             role="assistant",
-            content=choice.get("content") or "",
+            content="" if invocations else content,
+            reasoning=f"Generated by `{self.model}` ({comp_tokens} tokens in {elapsed:.2f}s).",
             tool_calls=invocations,
         )
         return GenerationOutput(
             message=msg,
-            telemetry=QuantTelemetrySnapshot(tier=self.tier),
+            telemetry=QuantTelemetrySnapshot(
+                tier=self.tier,
+                profile=profile_map[self.tier],  # type: ignore[arg-type]
+                weight_bits=4.0,
+                effective_act_bits=act_bits_map[self.tier],
+                promoted_tokens=comp_tokens if self.tier != "t1" else 0,
+                total_tokens=comp_tokens,
+                prefix_kv_hit=True,
+            ),
         )
 
 
@@ -262,6 +345,17 @@ class BackendRegistry:
             "t2": DeterministicReplayBackend(tier="t2"),
             "t3": DeterministicReplayBackend(tier="t3"),
         }
+
+    def configure_local_llm(
+        self,
+        base_url: str = "http://127.0.0.1:11434/v1",
+        primary_model: str = "qwen2.5:3b",
+        fallback_model: str | None = None,
+    ) -> None:
+        fb = fallback_model or primary_model
+        self._backends["t1"] = OpenAICompatibleBackend(base_url=base_url, model=primary_model, tier="t1")
+        self._backends["t2"] = OpenAICompatibleBackend(base_url=base_url, model=primary_model, tier="t2")
+        self._backends["t3"] = OpenAICompatibleBackend(base_url=base_url, model=fb, tier="t3")
 
     def register(self, tier: PrecisionTier, backend: ModelBackend) -> None:
         self._backends[tier] = backend

@@ -56,13 +56,30 @@ def get_lan_ip() -> str:
 class PocketGenieService:
     """Headless multi-agent service powering REST/SSE v1 endpoints for Web, React, Flutter, and CLI clients."""
 
-    def __init__(self, workspace_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        workspace_dir: Path | None = None,
+        backend_mode: str = "replay",
+        llm_base_url: str = "http://127.0.0.1:11434/v1",
+        primary_model: str = "qwen2.5:3b",
+        fallback_model: str | None = None,
+    ) -> None:
         self.workspace_dir = (workspace_dir or Path.cwd()).resolve()
+        self.backend_mode = backend_mode
+        self.llm_base_url = llm_base_url
+        self.primary_model = primary_model
+        self.fallback_model = fallback_model
         self.session_created_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.tool_registry = ToolRegistry()
         self.env_objects = register_all_builtin_tools(self.tool_registry, self.workspace_dir)
         self.mcp_bridge = MCPBridge(self.tool_registry)
         self.factory = TieredAgentFactory()
+        if self.backend_mode == "local-llm":
+            self.factory.backends.configure_local_llm(
+                base_url=self.llm_base_url,
+                primary_model=self.primary_model,
+                fallback_model=self.fallback_model,
+            )
         self.graph = GenieExecutionGraph(
             factory=self.factory,
             tool_registry=self.tool_registry,
@@ -119,6 +136,14 @@ class PocketGenieService:
         }
 
     def _configure_fault_simulation(self, fault: str, prompt: str) -> None:
+        if self.backend_mode == "local-llm" and fault == "none":
+            self.factory.backends.configure_local_llm(
+                base_url=self.llm_base_url,
+                primary_model=self.primary_model,
+                fallback_model=self.fallback_model,
+            )
+            return
+
         b_t1 = DeterministicReplayBackend(tier="t1")
         b_t2 = DeterministicReplayBackend(tier="t2")
         b_t3 = DeterministicReplayBackend(tier="t3")

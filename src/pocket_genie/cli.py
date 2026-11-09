@@ -17,7 +17,13 @@ from pocket_genie.server import PocketGenieService, create_http_server, get_lan_
 
 def cmd_serve(args: argparse.Namespace) -> int:
     ws = Path(args.workspace_dir).resolve() if args.workspace_dir else Path.cwd()
-    svc = PocketGenieService(workspace_dir=ws)
+    svc = PocketGenieService(
+        workspace_dir=ws,
+        backend_mode=args.backend,
+        llm_base_url=args.base_url,
+        primary_model=args.model,
+        fallback_model=args.fallback_model,
+    )
     if args.mcp_config:
         svc.mcp_bridge.load_config_file(Path(args.mcp_config))
     static_dir = Path(args.static_dir).resolve() if args.static_dir else None
@@ -29,7 +35,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         api_only=args.api_only,
     )
     lan_ip = get_lan_ip()
-    print("Pocket-Genie Server listening on:")
+    print(f"Pocket-Genie Server ({args.backend}: {args.model}) listening on:")
     print(f"  Local UI:     http://127.0.0.1:{args.port}")
     print(f"  Phone UI:     http://{lan_ip}:{args.port}")
     print(f"  Headless API: http://{lan_ip}:{args.port}/api/v1/openapi.json")
@@ -44,7 +50,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 def cmd_ask(args: argparse.Namespace) -> int:
     ws = Path(args.workspace_dir).resolve() if args.workspace_dir else Path.cwd()
-    svc = PocketGenieService(workspace_dir=ws)
+    svc = PocketGenieService(
+        workspace_dir=ws,
+        backend_mode=args.backend,
+        llm_base_url=args.base_url,
+        primary_model=args.model,
+        fallback_model=args.fallback_model,
+    )
     result = svc.run_turn(
         prompt=args.prompt,
         agent_type=args.agent_type,
@@ -140,6 +152,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_srv.add_argument("--mcp-config", type=str, default=None)
     p_srv.add_argument("--static-dir", type=str, default=None, help="Custom frontend build directory (e.g. React/Vite dist)")
     p_srv.add_argument("--api-only", action="store_true", help="Disable static UI serving (headless mode for Flutter/mobile)")
+    p_srv.add_argument("--backend", type=str, default="replay", choices=["replay", "local-llm"], help="Model execution backend")
+    p_srv.add_argument("--base-url", type=str, default="http://127.0.0.1:11434/v1", help="OpenAI-compatible endpoint (llama-server or ollama)")
+    p_srv.add_argument("--model", type=str, default="qwen2.5-coder:3b", help="Primary model identifier (t1/t2)")
+    p_srv.add_argument("--fallback-model", type=str, default=None, help="Optional larger fallback model for t3 escalation")
     p_srv.set_defaults(func=cmd_serve)
 
     p_ask = sub.add_parser("ask", help="Execute a multi-agent turn from the CLI.")
@@ -159,6 +175,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["none", "corrupted_json", "refusal", "hitl_patch"],
     )
     p_ask.add_argument("--workspace-dir", type=str, default=None)
+    p_ask.add_argument("--backend", type=str, default="replay", choices=["replay", "local-llm"])
+    p_ask.add_argument("--base-url", type=str, default="http://127.0.0.1:11434/v1")
+    p_ask.add_argument("--model", type=str, default="qwen2.5-coder:3b")
+    p_ask.add_argument("--fallback-model", type=str, default=None)
     p_ask.set_defaults(func=cmd_ask)
 
     p_sk = sub.add_parser("skills", help="List discovered markdown skill playbooks.")
