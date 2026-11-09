@@ -240,13 +240,203 @@ def _parse_arxiv_atom(xml_text: str) -> list[dict[str, Any]]:
     return entries
 
 
+class StudyDeckStore:
+    """SQLite flashcard store implementing SuperMemo SM-2 spaced repetition."""
 
-def register_research_tools(
+    def __init__(self, db_path: str | Path = ":memory:") -> None:
+        self._db_path = str(db_path)
+        if self._db_path != ":memory:":
+            Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._init_db()
+
+    def _init_db(self) -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flashcards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic TEXT NOT NULL,
+                front TEXT NOT NULL,
+                back TEXT NOT NULL,
+                repetitions INTEGER NOT NULL DEFAULT 0,
+                easiness_factor REAL NOT NULL DEFAULT 2.5,
+                interval_days INTEGER NOT NULL DEFAULT 0,
+                due_at TEXT NOT NULL,
+                last_reviewed_at TEXT
+            )
+            """
+        )
+        self._conn.commit()
+
+    def add_flashcard(self, topic: str, front: str, back: str) -> dict[str, Any]:
+        if not front.strip():
+            raise ValueError("Flashcard front cannot be empty.")
+        if not back.strip():
+            raise ValueError("Flashcard back cannot be empty.")
+
+        now = datetime.now(timezone.utc).isoformat()
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO flashcards (
+                topic, front, back, repetitions, easiness_factor,
+                interval_days, due_at, last_reviewed_at
+            ) VALUES (?, ?, ?, 0, 2.5, 0, ?, NULL)
+            """,
+            (topic.strip(), front.strip(), back.strip(), now),
+        )
+        self._conn.commit()
+        card_id = cur.lastrowid
+        card = self.get_flashcard(card_id)
+        if card is None:
+            raise RuntimeError("Failed to retrieve created flashcard.")
+        return card
+
+    def get_flashcard(self, card_id: int) -> dict[str, Any] | None:
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT id, topic, front, back, repetitions, easiness_factor,
+                   interval_days, due_at, last_reviewed_at
+            FROM flashcards
+            WHERE id = ?
+            """,
+            (int(card_id),),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def get_due_flashcards(
+        self,
+        topic: str = "",
+        limit: int = 10,
+        as_of: str | None = None,
+    ) -> list[dict[str, Any]]:
+        cutoff = as_of or datetime.now(timezone.utc).isoformat()
+        cur = self._conn.cursor()
+        max_limit = max(1, int(limit))
+
+        if topic.strip():
+            cur.execute(
+                """
+                SELECT id, topic, front, back, repetitions, easiness_factor,
+                       interval_days, due_at, last_reviewed_at
+                FROM flashcards
+                WHERE due_at <= ? AND lower(topic) = lower(?)
+                ORDER BY due_at ASC
+                LIMIT ?
+                """,
+                (cutoff, topic.strip(), max_limit),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, topic, front, back, repetitions, easiness_factor,
+                       interval_days, due_at, last_reviewed_at
+                FROM flashcards
+                WHERE due_at <= ?
+                ORDER BY due_at ASC
+                LIMIT ?
+                """,
+                (cutoff, max_limit),
+            )
+        return [dict(row) for row in cur.fetchall()]
+
+    def review_flashcard(
+        self,
+        card_id: int,
+        quality: int,
+        reviewed_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        card = self.get_flashcard(card_id)
+        if card is None:
+            raise KeyError(f"Flashcard with id {card_id} not found.")
+
+        q = int(quality)
+        if q < 0 or q > 5:
+            raise ValueError(f"Quality must be an integer between 0 and 5, got {quality}.")
+
+        ef = float(card["easiness_factor"])
+        rep = int(card["repetitions"])
+        interval = int(card["interval_days"])
+
+        new_ef = max(1.3, ef + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)))
+        new_ef = round(new_ef, 4)
+
+        if q < 3:
+            new_rep = 0
+            new_interval = 1
+        else:
+            if rep == 0:
+                new_interval = 1
+            elif rep == 1:
+                new_interval = 6
+            else:
+                new_interval = max(1, int(round(interval * new_ef)))
+            new_rep = rep + 1
+
+        now = reviewed_at or datetime.now(timezone.utc)
+        last_reviewed_at = now.isoformat()
+        due_at = (now + timedelta(days=new_interval)).isoformat()
+
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            UPDATE flashcards
+            SET repetitions = ?, easiness_factor = ?, interval_days = ?,
+                due_at = ?, last_reviewed_at = ?
+            WHERE id = ?
+            """,
+            (new_rep, new_ef, new_interval, due_at, last_reviewed_at, int(card_id)),
+        )
+        self._conn.commit()
+        updated = self.get_flashcard(card_id)
+        if updated is None:
+            raise RuntimeError(f"Failed to fetch updated flashcard {card_id}.")
+        return updated
+
+    def count(self, topic: str = "") -> int:
+        cur = self._conn.cursor()
+        if topic.strip():
+            cur.execute(
+                "SELECT count(*) FROM flashcards WHERE lower(topic) = lower(?)",
+                (topic.strip(),),
+            )
+        else:
+            cur.execute("SELECT count(*) FROM flashcards")
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+    def close(self) -> None:
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+
+
+def register_research_and_study_tools(
     registry: ToolRegistry,
     workspace_dir: Path,
     kb_store: HybridKnowledgeStore | None = None,
-) -> None:
-    kb = kb_store
+    study_store: StudyDeckStore | None = None,
+    jev_client: JevDecisionClient | None = None,
+    http_get: Callable[[str], str] | None = None,
+) -> StudyDeckStore:
+    """Register research and active-recall study tools with ToolRegistry."""
+    fetcher = http_get or _default_http_get
+    jev = jev_client or JevDecisionClient()
+
+    if study_store is None:
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            db_path: str | Path = ":memory:"
+        else:
+            db_path = workspace_dir / ".genie_study.db"
+        study_deck = StudyDeckStore(db_path=db_path)
+    else:
+        study_deck = study_store
+
     @registry.register(
         name="research.search_arxiv",
         description=(
@@ -334,3 +524,179 @@ def register_research_tools(
             indent=2,
         )
 
+    @registry.register(
+        name="study.add_flashcard",
+        description="Add a new flashcard to the active-recall study deck.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Subject or topic category."},
+                "front": {"type": "string", "description": "Flashcard question or cue."},
+                "back": {"type": "string", "description": "Flashcard answer or solution."},
+            },
+            "required": ["topic", "front", "back"],
+        },
+        domain="study",
+        mutating=False,
+    )
+    def add_flashcard(topic: str, front: str, back: str) -> str:
+        card = study_deck.add_flashcard(topic=topic, front=front, back=back)
+        return json.dumps(card, indent=2)
+
+    @registry.register(
+        name="study.due_flashcards",
+        description="Retrieve flashcards due for review under SuperMemo SM-2 spaced repetition.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Optional topic filter.", "default": ""},
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum flashcards to return.",
+                    "default": 10,
+                },
+                "as_of": {
+                    "type": "string",
+                    "description": "Optional ISO 8601 timestamp cutoff.",
+                    "default": "",
+                },
+            },
+        },
+        domain="study",
+        mutating=False,
+    )
+    def due_flashcards(topic: str = "", limit: int = 10, as_of: str = "") -> str:
+        cards = study_deck.get_due_flashcards(
+            topic=topic,
+            limit=limit,
+            as_of=as_of if as_of.strip() else None,
+        )
+        return json.dumps(cards, indent=2)
+
+    @registry.register(
+        name="study.review_flashcard",
+        description="Record a review grade (0..5) for a flashcard and advance its SM-2 interval.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "card_id": {"type": "integer", "description": "ID of the flashcard reviewed."},
+                "quality": {
+                    "type": "integer",
+                    "description": "SM-2 grade from 0 (blackout) to 5 (perfect recall).",
+                },
+            },
+            "required": ["card_id", "quality"],
+        },
+        domain="study",
+        mutating=False,
+    )
+    def review_flashcard(card_id: int, quality: int) -> str:
+        card = study_deck.review_flashcard(card_id=int(card_id), quality=int(quality))
+        return json.dumps(card, indent=2)
+
+    @registry.register(
+        name="study.grade_answer",
+        description=(
+            "Grade a user's active recall response using TypeSafe Jev Decisions and optionally "
+            "advance the flashcard's SM-2 interval."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "Flashcard question or cue."},
+                "reference_answer": {
+                    "type": "string",
+                    "description": "Ground truth reference answer.",
+                },
+                "user_answer": {"type": "string", "description": "User's submitted answer."},
+                "card_id": {
+                    "type": "integer",
+                    "description": "Optional flashcard ID to automatically review and advance.",
+                    "default": 0,
+                },
+            },
+            "required": ["question", "reference_answer", "user_answer"],
+        },
+        domain="study",
+        mutating=False,
+    )
+    def grade_answer(
+        question: str,
+        reference_answer: str,
+        user_answer: str,
+        card_id: int = 0,
+    ) -> str:
+        state = (
+            f"Question: {question.strip()}\n"
+            f"Reference Answer: {reference_answer.strip()}\n"
+            f"User Answer: {user_answer.strip()}"
+        )
+        questions = {
+            "factual_accuracy": {
+                "type": "noul",
+                "instructions": (
+                    "The user answer is factually consistent and accurate with respect to the "
+                    "reference answer."
+                ),
+            },
+            "missing_key_concept": {
+                "type": "noul",
+                "instructions": (
+                    "The user answer is missing essential domain concepts or key technical terms "
+                    "from the reference."
+                ),
+            },
+            "mastery_score": {
+                "type": "score",
+                "criteria": [
+                    "Completely incorrect, irrelevant, or hallucinatory response (0.0).",
+                    (
+                        "Partially correct answer but missing core concepts "
+                        "or contains factual errors (0.33)."
+                    ),
+                    "Mostly correct answer covering essential ideas with minor omissions (0.67).",
+                    (
+                        "Exemplary and comprehensive answer demonstrating "
+                        "full conceptual mastery (1.0)."
+                    ),
+                ],
+            },
+        }
+
+        decision = jev.decide(state=state, questions=questions)
+        answers = decision.get("answers") or {}
+
+        raw_mastery = (answers.get("mastery_score") or {}).get("score", 0.5)
+        factual_prob = (answers.get("factual_accuracy") or {}).get("noul", 0.5)
+        missing_prob = (answers.get("missing_key_concept") or {}).get("noul", 0.5)
+
+        score_val = float(raw_mastery)
+        if score_val <= 1.0:
+            quality = max(0, min(5, int(score_val * 5.0 + 0.5)))
+        else:
+            quality = max(0, min(5, int(score_val + 0.5)))
+
+        card_result = None
+        if int(card_id) > 0:
+            card_result = study_deck.review_flashcard(card_id=int(card_id), quality=quality)
+
+        feedback = {
+            "quality": quality,
+            "mastery_score": round(score_val, 4),
+            "factual_accuracy": round(float(factual_prob), 4),
+            "missing_key_concept": round(float(missing_prob), 4),
+            "card_id": int(card_id),
+            "card": card_result,
+            "decision": decision,
+        }
+        return json.dumps(feedback, indent=2)
+
+    return study_deck
+
+
+__all__ = [
+    "StudyDeckStore",
+    "html_to_clean_markdown",
+    "register_research_and_study_tools",
+    "validate_public_http_url",
+]

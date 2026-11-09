@@ -12,7 +12,7 @@ from pocket_genie.tools.devops import register_devops_tools
 from pocket_genie.tools.jev_tools import register_jev_tools
 from pocket_genie.tools.memory_tools import register_memory_and_kb_tools
 from pocket_genie.tools.personal_hub import PersonalHubStore, register_personal_tools
-from pocket_genie.tools.research_study import register_research_tools
+from pocket_genie.tools.research_study import StudyDeckStore, register_research_and_study_tools
 from pocket_genie.tools.sql_workspace import WorkspaceSQLStore, register_sql_tools
 from pocket_genie.tools.visualization import register_visualization_tools
 
@@ -39,7 +39,7 @@ def register_all_builtin_tools(
     register_memory_and_kb_tools(registry, mem, skills, kb)
     jev = register_jev_tools(registry)
     personal = register_personal_tools(registry, workspace_dir, store=personal_store, jev_client=jev)
-    register_research_tools(registry, workspace_dir, kb_store=kb)
+    study = register_research_and_study_tools(registry, workspace_dir, kb_store=kb, jev_client=jev)
     return {
         "memory_store": mem,
         "skill_registry": skills,
@@ -48,4 +48,5 @@ def register_all_builtin_tools(
         "device_state": dev_state,
         "jev_client": jev,
         "personal_store": personal,
+        "study_store": study,
     }
