@@ -15,6 +15,7 @@ from pocket_genie.tools.personal_hub import PersonalHubStore, register_personal_
 from pocket_genie.tools.research_study import StudyDeckStore, register_research_and_study_tools
 from pocket_genie.tools.sql_workspace import WorkspaceSQLStore, register_sql_tools
 from pocket_genie.tools.visualization import register_visualization_tools
+from pocket_genie.tools.work_coding import register_work_coding_tools
 
 
 def register_all_builtin_tools(
@@ -34,8 +35,9 @@ def register_all_builtin_tools(
 
     register_devops_tools(registry, workspace_dir)
     sql = register_sql_tools(registry, sql_store, workspace_dir=workspace_dir)
-    dev_state = register_device_tools(registry)
+    device_state = register_device_tools(registry)
     register_visualization_tools(registry)
+    register_work_coding_tools(registry, workspace_dir)
     register_memory_and_kb_tools(registry, mem, skills, kb)
     jev = register_jev_tools(registry)
     personal = register_personal_tools(registry, workspace_dir, store=personal_store, jev_client=jev)
@@ -45,7 +47,7 @@ def register_all_builtin_tools(
         "skill_registry": skills,
         "kb_store": kb,
         "sql_store": sql,
-        "device_state": dev_state,
+        "device_state": device_state,
         "jev_client": jev,
         "personal_store": personal,
         "study_store": study,
