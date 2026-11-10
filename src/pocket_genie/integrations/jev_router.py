@@ -93,6 +93,9 @@ _SPECIALIST_HINTS: dict[str, tuple[str, ...]] = {
     "sql_agent": ("sql", "select", "table", "ablation_results", "layer_telemetry", "failure_taxonomy", "schema"),
     "knowledge_base_agent": ("search", "docs", "documentation", "architecture", "smoothquant", "kurtosis", "kv cache"),
     "device_agent": ("battery", "cpu", "disk", "telemetry", "termux", "phone", "notification", "alert", "clipboard"),
+    "personal_agent": ("deadline", "due", "schedule", "agenda", "calendar", "reminder", "triage", "reply", "inbox"),
+    "work_ops_agent": ("github", "pull request", "databricks", "warehouse", "cluster", "antigravity", "claude code"),
+    "research_study_agent": ("arxiv", "paper", "preprint", "flashcard", "study", "quiz", "sm-2", "fetch_url"),
 }
 
 
@@ -148,6 +151,9 @@ def build_jev_triage_questions() -> dict[str, dict[str, Any]]:
                 "sql_agent": "SQL SELECT analytics, table schemas, quantization ablation tables, or chart metrics.",
                 "knowledge_base_agent": "Searching project docs, architecture notes, SmoothQuant/KV-cache concepts, or skills.",
                 "device_agent": "Host CPU/disk/battery telemetry, Android Termux hardware APIs, clipboard, or notifications.",
+                "personal_agent": "Personal deadlines, countdowns, schedules, native reminders, or message reply triage.",
+                "work_ops_agent": "GitHub PRs/issues/CI, Databricks SQL/jobs/clusters, Antigravity, or Claude Code sessions.",
+                "research_study_agent": "arXiv paper search, web doc fetching, SM-2 study flashcards, or active-recall quizzes.",
                 "supervisor": "Multi-domain tasks spanning two or more specialists, or general ambiguous requests.",
             },
         },

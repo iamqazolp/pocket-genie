@@ -22,6 +22,10 @@ Evaluated via `genie eval` ([`docs/BENCHMARKS.md`](docs/BENCHMARKS.md), [`benchm
 - **Compiled `LangGraph` `StateGraph` & Bounded ReAct Delegation (`core/`):** 4-node parallel fan-out (`user_messages_summary`, `recent_conversations`, `load_user_memories`, `jev_system_one_triage`) $\rightarrow$ conditional routing $\rightarrow$ bounded multi-step ReAct specialists (`devops`, `sql`, `kb`, `device`, `red-agent`, and auto-wrapped `MCP` servers) with `InMemorySaver` checkpointing.
 - **`LangChain` & `Langfuse` OpenTelemetry Observability (`integrations/`, `observability/`):** Lossless `BaseChatModel` (`PocketGenieChatModel`) and Pydantic-synthesized `StructuredTool` adapters, plus `GenieLangfuseTracer` & `LangfuseTracingMiddleware` exporting `agent`, `generation`, `tool`, and `guardrail` OTel spans with live quantization scores (`effective_act_bits`, `promoted_token_ratio`, `kv_memory_saved_mb`).
 - **10-Stage Guardrail Pipeline & Mobile HITL Console (`middlewares/`, `server.py`, `clients/flutter/`):** Orphaned-tool message sanitization, prefix-cache-safe prompts, rolling `RunningSummary` compaction, SQL CTE allowlisting, repeat-call loop breaking, `t1 -> t2 -> t3` fallback escalation, and Web/Flutter Human-in-the-Loop approval cards with post-approval LLM synthesis.
+- **47 Built-In Daily-Driver Tools Across 9 Specialists (`tools/`):**
+  - **Personal Hub (`personal_agent`):** SQLite deadlines with live countdowns, daily schedule + macOS Calendar/Reminders bridge, and Jev-scored message triage (`urgency`, `tone`, `priority_score`) with reply drafting.
+  - **Work Connectors (`work_ops_agent`, `devops_agent`):** GitHub PRs/issues/Actions CI + HITL branch/commit ops, read-only **Databricks** Jobs/Clusters/Unity Catalog SQL (`~/.databrickscfg` + env vars), and **Google Antigravity** (`brain`/`.local-notes`) + **Claude Code** (`CLAUDE.md`/`.claude`/JSONL session) inspectors.
+  - **Research & Active-Recall Study (`research_study_agent`):** arXiv preprint search, SSRF-safe URL-to-Markdown ingestion into `HybridKnowledgeStore`, SuperMemo **SM-2** spaced-repetition flashcards, and Jev-graded active-recall quizzes.
 
 ---
 
@@ -47,6 +51,12 @@ pytest -q
 ### 3. CLI Usage (`genie`)
 
 ```bash
+# Instant morning dashboard across deadlines, messages, Git, Antigravity/Claude sessions, Databricks, and due flashcards
+genie brief
+
+# Interactive multi-turn CLI vibe-coding & life-ops REPL (/brief, /status, /diff, /test, /tier, inline y/N HITL)
+genie vibe --backend local-llm --model qwen2.5-coder:7b
+
 # Inspect compiled LangGraph StateGraph Mermaid diagram, specialists, and skills
 genie graph
 genie specialists

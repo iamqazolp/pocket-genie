@@ -4,6 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
+from pocket_genie.cli_daily import (
+    build_daily_briefing,
+    format_briefing_markdown,
+    run_vibe_repl,
+)
 from pocket_genie.core import GenieExecutionGraph, list_specialist_configs
 from pocket_genie.eval import run_eval_suite
 from pocket_genie.mcp import MCPBridge
@@ -160,6 +165,29 @@ def cmd_graph(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_brief(args: argparse.Namespace) -> int:
+    ws = Path(args.workspace_dir).resolve() if args.workspace_dir else Path.cwd()
+    svc = PocketGenieService(workspace_dir=ws, backend_mode="replay")
+    brief = build_daily_briefing(svc)
+    if args.json:
+        print(json.dumps(brief, indent=2, default=str))
+    else:
+        print(format_briefing_markdown(brief))
+    return 0
+
+
+def cmd_vibe(args: argparse.Namespace) -> int:
+    ws = Path(args.workspace_dir).resolve() if args.workspace_dir else Path.cwd()
+    svc = PocketGenieService(
+        workspace_dir=ws,
+        backend_mode=args.backend,
+        llm_base_url=args.base_url,
+        primary_model=args.model,
+        fallback_model=args.fallback_model,
+    )
+    return run_vibe_repl(svc, initial_tier=args.tier)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="genie",
@@ -227,6 +255,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_gr = sub.add_parser("graph", help="Print compiled LangGraph StateGraph topology in Mermaid format.")
     p_gr.set_defaults(func=cmd_graph)
+
+    p_br = sub.add_parser(
+        "brief",
+        help="Print morning daily dashboard across deadlines, messages, Git, Agent Ops, Databricks, and study cards.",
+    )
+    p_br.add_argument("--workspace-dir", type=str, default=None)
+    p_br.add_argument("--json", action="store_true", help="Output raw JSON instead of Markdown")
+    p_br.set_defaults(func=cmd_brief)
+
+    p_vb = sub.add_parser(
+        "vibe",
+        help="Start interactive multi-turn CLI vibe-coding & personal-ops REPL with inline HITL prompts.",
+    )
+    p_vb.add_argument("--workspace-dir", type=str, default=None)
+    p_vb.add_argument("--tier", type=str, default="t1", choices=["t1", "t2", "t3"])
+    p_vb.add_argument("--backend", type=str, default="local-llm", choices=["replay", "local-llm", "hf-quant"])
+    p_vb.add_argument("--base-url", type=str, default="http://127.0.0.1:11434/v1")
+    p_vb.add_argument("--model", type=str, default="qwen2.5-coder:7b")
+    p_vb.add_argument("--fallback-model", type=str, default=None)
+    p_vb.set_defaults(func=cmd_vibe)
 
     return parser
 

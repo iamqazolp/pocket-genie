@@ -255,18 +255,22 @@ class PocketGenieService:
             "active_tier": self.state.active_tier,
             "steps": build_timeline_steps(writer.events),
             "approval_request": new_approval,
+            "pending_hitl": [new_approval] if new_approval else [],
             "events": [{"event_type": e.event_type, "data": e.data} for e in writer.events],
             "state": self.get_state_summary(),
         }
 
-    def resolve_hitl(self, request_id: str, approved: bool) -> dict[str, Any]:
-        self.graph.hitl.record_decision(request_id, approved=approved)
-        target_req = next((r for r in self.state.pending_hitl if r.request_id == request_id), None)
+    def resolve_hitl(
+        self, request_id: str = "", approved: bool = False, *, call_id: str = ""
+    ) -> dict[str, Any]:
+        req_id = request_id or call_id
+        self.graph.hitl.record_decision(req_id, approved=approved)
+        target_req = next((r for r in self.state.pending_hitl if r.request_id == req_id), None)
         if target_req is None:
-            raise KeyError(f"Unknown HITL request_id {request_id!r}")
+            raise KeyError(f"Unknown HITL request_id {req_id!r}")
 
         target_req.status = "approved" if approved else "rejected"
-        output_text = f"[HITL_REJECTED] Request {request_id} rejected by user."
+        output_text = f"[HITL_REJECTED] Request {req_id} rejected by user."
         if approved:
             output_text = str(self.tool_registry.execute(target_req.tool_name, target_req.arguments))
 
