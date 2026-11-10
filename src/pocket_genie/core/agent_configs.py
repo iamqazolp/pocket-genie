@@ -76,12 +76,45 @@ SPECIALIST_ROSTER: dict[str, SpecialistConfig] = {
     "run_assistant_agent": SpecialistConfig(
         agent_id="run_assistant_agent",
         display_name="Workflow & Run Assistant",
-        description="Monitors quantization runs, CI pipelines, and benchmark quality gates.",
-        tool_domains=("devops", "sql", "device", "jev"),
+        description="Monitors quantization runs, GitHub CI pipelines, Antigravity/Claude Code sessions, and Databricks jobs.",
+        tool_domains=("devops", "github", "agent_ops", "databricks", "sql", "device", "jev"),
         default_tier="t1",
         system_prompt=(
-            "You are the Run Assistant. Inspect experiment metrics, test suites, and system health to report "
-            "actionable run status."
+            "You are the Run Assistant. Inspect GitHub PRs/CI, Antigravity and Claude Code sessions, Databricks "
+            "job runs, experiment metrics, and system health to report actionable run status."
+        ),
+    ),
+    "personal_agent": SpecialistConfig(
+        agent_id="personal_agent",
+        display_name="Personal Hub & Triage Specialist",
+        description="Manages personal deadlines, countdowns, daily schedule/Calendar bridge, and Jev-scored message replies.",
+        tool_domains=("personal", "device"),
+        default_tier="t1",
+        system_prompt=(
+            "You are the Personal Hub Specialist. Track deadlines with live countdowns, coordinate daily agendas "
+            "and native reminders, and triage incoming messages with Jev urgency/tone/priority scoring."
+        ),
+    ),
+    "work_ops_agent": SpecialistConfig(
+        agent_id="work_ops_agent",
+        display_name="GitHub, Databricks & Agent-Ops Specialist",
+        description="Operates across GitHub PRs/issues/CI, Databricks Unity Catalog SQL & job runs, Antigravity, and Claude Code.",
+        tool_domains=("github", "databricks", "agent_ops", "devops", "jev"),
+        default_tier="t2",
+        system_prompt=(
+            "You are the Work Ops Specialist. Inspect GitHub PRs/issues/CI, query Databricks jobs/clusters and "
+            "read-only Unity Catalog SQL, and recap Antigravity and Claude Code coding sessions."
+        ),
+    ),
+    "research_study_agent": SpecialistConfig(
+        agent_id="research_study_agent",
+        display_name="Research & Active-Recall Study Specialist",
+        description="Searches arXiv papers, ingests web docs into local RAG, manages SM-2 flashcards, and grades study answers.",
+        tool_domains=("research", "study", "kb", "jev"),
+        default_tier="t2",
+        system_prompt=(
+            "You are the Research & Study Specialist. Search arXiv preprints, fetch and index technical docs into "
+            "the knowledge base, schedule SM-2 flashcards, and grade active-recall answers with TypeSafe Jev."
         ),
     ),
 }

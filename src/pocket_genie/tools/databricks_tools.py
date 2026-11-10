@@ -164,6 +164,42 @@ def resolve_databricks_config(
     return None
 
 
+def validate_readonly_databricks_sql(statement: str) -> str:
+    """Enforce read-only semantics for Databricks SQL execution.
+
+    Allows only SELECT, WITH, SHOW, DESCRIBE, DESC, and EXPLAIN.
+    Raises ValueError on mutating keywords (DROP, DELETE, INSERT, UPDATE, MERGE,
+    ALTER, TRUNCATE, CREATE, GRANT, REVOKE, COPY).
+    """
+    if not statement or not statement.strip():
+        raise ValueError("SQL statement cannot be empty.")
+
+    cleaned = statement.strip()
+    no_comments = re.sub(r"--[^\n]*", "", cleaned)
+    no_comments = re.sub(r"/\*.*?\*/", "", no_comments, flags=re.DOTALL).strip()
+
+    if not no_comments:
+        raise ValueError("SQL statement contains no executable query.")
+
+    # Strip string literals before forbidden keyword check to prevent false positives on literals
+    no_strings = re.sub(r"'(?:''|[^'])*'", "''", no_comments)
+    no_strings = re.sub(r'"(?:""|[^"])*"', '""', no_strings)
+
+    forbidden_match = _FORBIDDEN_SQL_RE.search(no_strings)
+    if forbidden_match:
+        kw = forbidden_match.group(0).upper()
+        raise ValueError(f"Forbidden mutating SQL keyword detected: {kw}")
+
+    first_word = no_comments.split()[0].upper().rstrip(";")
+    if first_word not in _ALLOWED_SQL_PREFIXES:
+        raise ValueError(
+            f"Statement verb {first_word!r} is not allowed. "
+            f"Only read-only statements ({', '.join(_ALLOWED_SQL_PREFIXES)}) are permitted."
+        )
+
+    return cleaned
+
+
 class DatabricksWorkspaceClient:
     """Zero-dependency Databricks REST client with pluggable transport for testing."""
 
@@ -340,6 +376,75 @@ class DatabricksWorkspaceClient:
         out.setdefault("configured", True)
         return out
 
+    def sql_query(
+        self,
+        statement: str,
+        warehouse_id: str = "",
+        catalog: str = "",
+        schema: str = "",
+        row_limit: int = 50,
+    ) -> dict[str, Any]:
+        """Execute read-only SQL via POST /api/2.0/sql/statements and zip column manifests."""
+        if not self.is_configured or self.config is None:
+            return self._unconfigured_response()
+
+        validated_sql = validate_readonly_databricks_sql(statement)
+        effective_wh = warehouse_id or self.config.warehouse_id
+        if not effective_wh:
+            return {
+                "configured": True,
+                "error": (
+                    "No warehouse_id provided. Specify warehouse_id in arguments, "
+                    "DATABRICKS_WAREHOUSE_ID, or ~/.databrickscfg."
+                ),
+                "rows": [],
+                "row_count": 0,
+            }
+
+        payload: dict[str, Any] = {
+            "statement": validated_sql,
+            "warehouse_id": effective_wh,
+            "row_limit": row_limit,
+            "wait_timeout": "30s",
+            "disposition": "INLINE",
+            "format": "JSON_ARRAY",
+        }
+        if catalog:
+            payload["catalog"] = catalog
+        if schema:
+            payload["schema"] = schema
+
+        resp = self._request("POST", "/api/2.0/sql/statements", body=payload)
+        if not isinstance(resp, dict):
+            return {"configured": True, "rows": [], "row_count": 0}
+        if "error" in resp:
+            return resp
+
+        manifest = resp.get("manifest") or {}
+        manifest_schema = manifest.get("schema") or {}
+        cols_raw = manifest_schema.get("columns") or []
+        col_names = [
+            c.get("name", f"col_{i}") if isinstance(c, dict) else str(c)
+            for i, c in enumerate(cols_raw)
+        ]
+
+        res_obj = resp.get("result") or {}
+        data_array = res_obj.get("data_array") or []
+
+        rows: list[dict[str, Any]] = []
+        for row in data_array:
+            if col_names:
+                rows.append(dict(zip(col_names, row)))
+            else:
+                rows.append({f"col_{i}": val for i, val in enumerate(row)})
+
+        out = dict(resp)
+        out["columns"] = col_names
+        out["rows"] = rows
+        out["row_count"] = len(rows)
+        out.setdefault("configured", True)
+        return out
+
 
 def register_databricks_tools(
     registry: ToolRegistry,
@@ -417,4 +522,52 @@ def register_databricks_tools(
         res = databricks_client.clusters_status(limit=limit)
         return json.dumps(res, indent=2)
 
-    return dbx
+    @registry.register(
+        name="databricks.sql_query",
+        description="Execute a read-only SQL query on a Databricks SQL Warehouse.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "statement": {
+                    "type": "string",
+                    "description": "Read-only SQL statement (SELECT, WITH, SHOW, DESCRIBE, EXPLAIN).",
+                },
+                "warehouse_id": {
+                    "type": "string",
+                    "description": "Target SQL Warehouse ID (defaults to configured warehouse_id).",
+                },
+                "catalog": {
+                    "type": "string",
+                    "description": "Optional default catalog context.",
+                },
+                "schema": {
+                    "type": "string",
+                    "description": "Optional default schema/database context.",
+                },
+                "row_limit": {
+                    "type": "integer",
+                    "description": "Maximum rows to return in the result set (default: 50).",
+                },
+            },
+            "required": ["statement"],
+        },
+        domain="databricks",
+        mutating=False,
+    )
+    def sql_query(
+        statement: str,
+        warehouse_id: str = "",
+        catalog: str = "",
+        schema: str = "",
+        row_limit: int = 50,
+    ) -> str:
+        res = databricks_client.sql_query(
+            statement=statement,
+            warehouse_id=warehouse_id,
+            catalog=catalog,
+            schema=schema,
+            row_limit=row_limit,
+        )
+        return json.dumps(res, indent=2)
+
+    return databricks_client
