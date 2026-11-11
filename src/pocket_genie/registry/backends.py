@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
+import os
 import re
 import time
 import urllib.request
 from typing import Any, Protocol
 
+from pocket_genie.env_config import ApiLLMConfig, get_ssl_context, resolve_api_llm_config
 from pocket_genie.shared import (
     ChatMessage,
     PrecisionTier,
@@ -264,15 +267,18 @@ def _post_json(url: str, payload: dict[str, Any], api_key: str, timeout: float) 
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
+            "User-Agent": "pocket-genie/0.3",
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=get_ssl_context()) as resp:
         return dict(json.loads(resp.read().decode("utf-8")))
 
 
 class OpenAICompatibleBackend:
-    """HTTP client backend for on-device llama-server (Termux), Ollama, vLLM, or OpenAI endpoints with live logprobs routing."""
+    """HTTP client backend for on-device llama-server (Termux), Ollama, vLLM,
+    or OpenAI endpoints with live logprobs routing.
+    """
 
     def __init__(
         self,
@@ -281,6 +287,8 @@ class OpenAICompatibleBackend:
         api_key: str = "local",
         tier: PrecisionTier = "t1",
         timeout: float = 60.0,
+        backup_model: str | None = None,
+        request_logprobs: bool = True,
     ) -> None:
         self.name = f"local-llm:{model}"
         self.base_url = base_url.rstrip("/")
@@ -288,6 +296,8 @@ class OpenAICompatibleBackend:
         self.api_key = api_key
         self.tier = tier
         self.timeout = timeout
+        self.backup_model = backup_model if backup_model != model else None
+        self.request_logprobs = request_logprobs
 
     def generate(
         self,
@@ -300,20 +310,38 @@ class OpenAICompatibleBackend:
         from pocket_genie.quant.enforcer import build_tool_call_schema
         from pocket_genie.quant.entropy_router import TokenPrecisionRouter
 
+        wire_to_orig: dict[str, str] = {}
+        orig_to_wire: dict[str, str] = {}
+        wire_tools: list[dict[str, Any]] | None = None
+        if tools is not None:
+            wire_tools = []
+            for t in tools:
+                tc = copy.deepcopy(t)
+                fn = tc.get("function")
+                if isinstance(fn, dict) and "name" in fn:
+                    orig_name = str(fn["name"])
+                    wire_name = re.sub(r"[^a-zA-Z0-9_-]", "__", orig_name)
+                    fn["name"] = wire_name
+                    wire_to_orig[wire_name] = orig_name
+                    orig_to_wire[orig_name] = wire_name
+                wire_tools.append(tc)
+
         out_messages: list[dict[str, Any]] = []
         for m in messages:
             d: dict[str, Any] = {"role": m.role, "content": m.content}
             if m.role == "tool":
                 d["tool_call_id"] = m.tool_call_id or "call_0"
                 if m.name:
-                    d["name"] = m.name
+                    d["name"] = orig_to_wire.get(m.name, re.sub(r"[^a-zA-Z0-9_-]", "__", m.name))
             elif m.role == "assistant" and m.tool_calls:
                 d["tool_calls"] = [
                     {
                         "id": tc.id,
                         "type": "function",
                         "function": {
-                            "name": tc.name,
+                            "name": orig_to_wire.get(
+                                tc.name, re.sub(r"[^a-zA-Z0-9_-]", "__", tc.name)
+                            ),
                             "arguments": json.dumps(tc.arguments),
                         },
                     }
@@ -321,8 +349,15 @@ class OpenAICompatibleBackend:
                 ]
             out_messages.append(d)
 
-        if tools and constrain_schema:
-            schema = build_tool_call_schema(tools)
+        is_local = any(h in self.base_url for h in ("127.0.0.1", "localhost", "0.0.0.0"))
+        enforce_tool_json = bool(
+            wire_tools
+            and constrain_schema
+            and is_local
+            and not any(m.role == "tool" for m in messages)
+        )
+        if enforce_tool_json:
+            schema = build_tool_call_schema(wire_tools)
             out_messages.append(
                 {
                     "role": "system",
@@ -337,32 +372,42 @@ class OpenAICompatibleBackend:
             "model": self.model,
             "messages": out_messages,
             "temperature": 0.0,
-            "logprobs": True,
-            "top_logprobs": 5,
         }
-        if tools:
-            payload["tools"] = tools
-        if tools and constrain_schema:
+        payload["logprobs"] = True
+        payload["top_logprobs"] = 5
+        if wire_tools:
+            payload["tools"] = wire_tools
+        if enforce_tool_json:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "tool_call",
-                    "schema": build_tool_call_schema(tools),
+                    "schema": build_tool_call_schema(wire_tools),
                 },
             }
 
         endpoint = f"{self.base_url}/chat/completions"
         t0 = time.perf_counter()
+        stripped_payload = {
+            k: v
+            for k, v in payload.items()
+            if k not in ("logprobs", "top_logprobs", "response_format")
+        }
         try:
-            body = _post_json(endpoint, payload, self.api_key, self.timeout)
-        except urllib.error.HTTPError as exc:
-            if exc.code in (400, 422):
-                fallback_payload = {
-                    k: v for k, v in payload.items() if k not in ("logprobs", "top_logprobs", "response_format")
-                }
-                body = _post_json(endpoint, fallback_payload, self.api_key, self.timeout)
-            else:
+            try:
+                body = _post_json(endpoint, payload, self.api_key, self.timeout)
+            except urllib.error.HTTPError as exc:
+                if exc.code in (400, 404, 422, 429, 500, 502, 503, 504):
+                    if exc.code in (429, 502, 503, 504) and "PYTEST_CURRENT_TEST" not in os.environ:
+                        time.sleep(1.0)
+                    body = _post_json(endpoint, stripped_payload, self.api_key, self.timeout)
+                else:
+                    raise
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+            if not self.backup_model:
                 raise
+            backup_payload = {**stripped_payload, "model": self.backup_model}
+            body = _post_json(endpoint, backup_payload, self.api_key, self.timeout)
         elapsed = max(1e-3, time.perf_counter() - t0)
 
         choice_obj = body["choices"][0]
@@ -373,15 +418,25 @@ class OpenAICompatibleBackend:
             fn = tc.get("function", {})
             raw_args = fn.get("arguments", "{}")
             parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+            raw_name = fn.get("name", "")
+            orig_name = wire_to_orig.get(raw_name, raw_name.replace("__", "."))
             invocations.append(
                 ToolInvocation(
                     id=tc.get("id") or f"call_{idx}",
-                    name=fn.get("name", ""),
+                    name=orig_name,
                     arguments=parsed_args,
                 )
             )
         if not invocations and content:
-            invocations = parse_tool_calls_from_text(content)
+            raw_invocations = parse_tool_calls_from_text(content)
+            invocations = [
+                ToolInvocation(
+                    id=inv.id,
+                    name=wire_to_orig.get(inv.name, inv.name.replace("__", ".")),
+                    arguments=inv.arguments,
+                )
+                for inv in raw_invocations
+            ]
 
         usage = body.get("usage") or {}
         comp_tokens = int(usage.get("completion_tokens") or max(1, len(content) // 4))
@@ -450,6 +505,78 @@ class BackendRegistry:
         self._backends["t1"] = OpenAICompatibleBackend(base_url=base_url, model=primary_model, tier="t1")
         self._backends["t2"] = OpenAICompatibleBackend(base_url=base_url, model=primary_model, tier="t2")
         self._backends["t3"] = OpenAICompatibleBackend(base_url=base_url, model=fb, tier="t3")
+
+    def configure_api_llm(
+        self,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        fast_model: str | None = None,
+        accurate_model: str | None = None,
+    ) -> ApiLLMConfig:
+        cfg = resolve_api_llm_config(
+            base_url=base_url,
+            fast_model=fast_model,
+            accurate_model=accurate_model,
+        )
+        resolved_key = api_key or cfg.api_key
+        self._backends["t1"] = OpenAICompatibleBackend(
+            base_url=cfg.base_url,
+            model=cfg.fast_model,
+            api_key=resolved_key,
+            tier="t1",
+            timeout=25.0,
+            backup_model=cfg.accurate_model,
+        )
+        self._backends["t2"] = OpenAICompatibleBackend(
+            base_url=cfg.base_url,
+            model=cfg.fast_model,
+            api_key=resolved_key,
+            tier="t2",
+            timeout=25.0,
+            backup_model=cfg.accurate_model,
+        )
+        self._backends["t3"] = OpenAICompatibleBackend(
+            base_url=cfg.base_url,
+            model=cfg.accurate_model,
+            api_key=resolved_key,
+            tier="t3",
+            timeout=35.0,
+            backup_model=cfg.fast_model,
+        )
+        return cfg
+
+    def configure_hybrid(
+        self,
+        local_base_url: str = "http://127.0.0.1:11434/v1",
+        local_model: str = "qwen2.5-coder:7b",
+        api_base_url: str | None = None,
+        api_key: str | None = None,
+        cloud_model: str | None = None,
+    ) -> ApiLLMConfig:
+        cfg = resolve_api_llm_config(
+            base_url=api_base_url,
+            accurate_model=cloud_model,
+        )
+        resolved_key = api_key or cfg.api_key
+        self._backends["t1"] = OpenAICompatibleBackend(
+            base_url=local_base_url,
+            model=local_model,
+            tier="t1",
+        )
+        self._backends["t2"] = OpenAICompatibleBackend(
+            base_url=local_base_url,
+            model=local_model,
+            tier="t2",
+        )
+        self._backends["t3"] = OpenAICompatibleBackend(
+            base_url=cfg.base_url,
+            model=cloud_model or cfg.accurate_model,
+            api_key=resolved_key,
+            tier="t3",
+            timeout=35.0,
+            backup_model=cfg.fast_model,
+        )
+        return cfg
 
     def configure_hf_quant(
         self,

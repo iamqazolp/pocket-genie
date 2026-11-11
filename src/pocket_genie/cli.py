@@ -41,7 +41,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         api_only=args.api_only,
     )
     lan_ip = get_lan_ip()
-    print(f"Pocket-Genie Server ({args.backend}: {args.model}) listening on:")
+    print(f"Pocket-Genie Server ({args.backend}: {svc.primary_model}) listening on:")
     print(f"  Local UI:     http://127.0.0.1:{args.port}")
     print(f"  Phone UI:     http://{lan_ip}:{args.port}")
     print(f"  Headless API: http://{lan_ip}:{args.port}/api/v1/openapi.json")
@@ -202,10 +202,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_srv.add_argument("--mcp-config", type=str, default=None)
     p_srv.add_argument("--static-dir", type=str, default=None, help="Custom frontend build directory (e.g. React/Vite dist)")
     p_srv.add_argument("--api-only", action="store_true", help="Disable static UI serving (headless mode for Flutter/mobile)")
-    p_srv.add_argument("--backend", type=str, default="replay", choices=["replay", "local-llm", "hf-quant"], help="Model execution backend")
-    p_srv.add_argument("--base-url", type=str, default="http://127.0.0.1:11434/v1", help="OpenAI-compatible endpoint (llama-server or ollama)")
-    p_srv.add_argument("--model", type=str, default="qwen2.5-coder:7b", help="Primary model identifier (Ollama tag or HuggingFace repo ID)")
-    p_srv.add_argument("--fallback-model", type=str, default=None, help="Optional larger fallback model for t3 escalation")
+    p_srv.add_argument(
+        "--backend",
+        type=str,
+        default="replay",
+        choices=["replay", "local-llm", "api-llm", "hybrid", "hf-quant"],
+        help="Model execution backend",
+    )
+    p_srv.add_argument("--base-url", type=str, default="http://127.0.0.1:11434/v1", help="OpenAI-compatible endpoint (llama-server, ollama, or cloud API)")
+    p_srv.add_argument("--model", type=str, default="qwen2.5-coder:7b", help="Primary model identifier (defaults to gpt-6-luna under --backend api-llm)")
+    p_srv.add_argument("--fallback-model", type=str, default=None, help="Fallback model for t3 escalation (defaults to gpt-6.1-terra under api-llm/hybrid)")
     p_srv.set_defaults(func=cmd_serve)
 
     p_ask = sub.add_parser("ask", help="Execute a multi-agent turn from the CLI.")
@@ -225,7 +231,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["none", "corrupted_json", "refusal", "hitl_patch"],
     )
     p_ask.add_argument("--workspace-dir", type=str, default=None)
-    p_ask.add_argument("--backend", type=str, default="replay", choices=["replay", "local-llm", "hf-quant"])
+    p_ask.add_argument(
+        "--backend",
+        type=str,
+        default="replay",
+        choices=["replay", "local-llm", "api-llm", "hybrid", "hf-quant"],
+    )
     p_ask.add_argument("--base-url", type=str, default="http://127.0.0.1:11434/v1")
     p_ask.add_argument("--model", type=str, default="qwen2.5-coder:7b")
     p_ask.add_argument("--fallback-model", type=str, default=None)
@@ -245,7 +256,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_bn.set_defaults(func=cmd_bench)
 
     p_ev = sub.add_parser("eval", help="Run empirical 30-task multi-domain tool-calling & quantization benchmark.")
-    p_ev.add_argument("--backend", type=str, default="hf-quant", choices=["replay", "local-llm", "hf-quant"])
+    p_ev.add_argument(
+        "--backend",
+        type=str,
+        default="hf-quant",
+        choices=["replay", "local-llm", "api-llm", "hybrid", "hf-quant"],
+    )
     p_ev.add_argument("--model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
     p_ev.add_argument("--base-url", type=str, default="http://127.0.0.1:11434/v1")
     p_ev.add_argument("--workspace-dir", type=str, default=None)
@@ -270,7 +286,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_vb.add_argument("--workspace-dir", type=str, default=None)
     p_vb.add_argument("--tier", type=str, default="t1", choices=["t1", "t2", "t3"])
-    p_vb.add_argument("--backend", type=str, default="local-llm", choices=["replay", "local-llm", "hf-quant"])
+    p_vb.add_argument(
+        "--backend",
+        type=str,
+        default="api-llm",
+        choices=["replay", "local-llm", "api-llm", "hybrid", "hf-quant"],
+    )
     p_vb.add_argument("--base-url", type=str, default="http://127.0.0.1:11434/v1")
     p_vb.add_argument("--model", type=str, default="qwen2.5-coder:7b")
     p_vb.add_argument("--fallback-model", type=str, default=None)

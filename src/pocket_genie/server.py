@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import mimetypes
+import os
 import socket
 import urllib.parse
 from http import HTTPStatus
@@ -22,6 +23,7 @@ from pocket_genie.core import (
     TieredAgentFactory,
     list_specialist_configs,
 )
+from pocket_genie.env_config import load_dotenv_file
 from pocket_genie.integrations import LANGCHAIN_AVAILABLE
 from pocket_genie.mcp import MCPBridge
 from pocket_genie.observability import GenieLangfuseTracer
@@ -30,6 +32,8 @@ from pocket_genie.registry import (
     GenerationOutput,
     ToolRegistry,
 )
+from pocket_genie.retrieval.embeddings import HashEmbeddingProvider
+from pocket_genie.retrieval.hybrid_store import HybridKnowledgeStore
 from pocket_genie.shared import (
     AgentType,
     ChatMessage,
@@ -67,13 +71,22 @@ class PocketGenieService:
         fallback_model: str | None = None,
     ) -> None:
         self.workspace_dir = (workspace_dir or Path.cwd()).resolve()
+        if "PYTEST_CURRENT_TEST" not in os.environ:
+            load_dotenv_file(self.workspace_dir / ".env")
         self.backend_mode = backend_mode
         self.llm_base_url = llm_base_url
         self.primary_model = primary_model
         self.fallback_model = fallback_model
         self.session_created_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.tool_registry = ToolRegistry()
-        self.env_objects = register_all_builtin_tools(self.tool_registry, self.workspace_dir)
+        init_kb = (
+            HybridKnowledgeStore(embedder=HashEmbeddingProvider())
+            if self.backend_mode == "replay"
+            else None
+        )
+        self.env_objects = register_all_builtin_tools(
+            self.tool_registry, self.workspace_dir, kb_store=init_kb
+        )
         self.mcp_bridge = MCPBridge(self.tool_registry)
         self.factory = TieredAgentFactory()
         self.tracer = GenieLangfuseTracer()
@@ -83,6 +96,30 @@ class PocketGenieService:
                 primary_model=self.primary_model,
                 fallback_model=self.fallback_model,
             )
+        elif self.backend_mode == "api-llm":
+            custom_base = (
+                None if self.llm_base_url == "http://127.0.0.1:11434/v1" else self.llm_base_url
+            )
+            custom_fast = (
+                None
+                if self.primary_model in ("qwen2.5:3b", "qwen2.5-coder:7b")
+                else self.primary_model
+            )
+            api_cfg = self.factory.backends.configure_api_llm(
+                base_url=custom_base,
+                fast_model=custom_fast,
+                accurate_model=self.fallback_model,
+            )
+            self._api_base_url = api_cfg.base_url
+            self.primary_model = api_cfg.fast_model
+            self.fallback_model = api_cfg.accurate_model
+        elif self.backend_mode == "hybrid":
+            api_cfg = self.factory.backends.configure_hybrid(
+                local_base_url=self.llm_base_url,
+                local_model=self.primary_model,
+                cloud_model=self.fallback_model,
+            )
+            self.fallback_model = api_cfg.accurate_model
         elif self.backend_mode == "hf-quant":
             runtime = self.factory.backends.configure_hf_quant(model_id=self.primary_model)
             self.factory.kv_cache = runtime.kv_cache
