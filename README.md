@@ -54,8 +54,14 @@ pytest -q
 # Instant morning dashboard across deadlines, messages, Git, Antigravity/Claude sessions, Databricks, and due flashcards
 genie brief
 
-# Interactive multi-turn CLI vibe-coding & life-ops REPL (/brief, /status, /diff, /test, /tier, inline y/N HITL)
-genie vibe --backend local-llm --model qwen2.5-coder:7b
+# Interactive multi-turn CLI vibe-coding & life-ops REPL (defaults to --backend api-llm from .env)
+genie vibe
+
+# Run Cloud API LLM turn (t1/t2: gpt-6-luna -> t3: gpt-6.1-terra + gemini-embedding-2 RAG)
+genie ask --backend api-llm --tier t3 --prompt "Search workspace docs for SmoothQuant kurtosis and check git status"
+
+# Run Hybrid Edge-to-Cloud turn (t1/t2 local Ollama -> t3 gpt-6.1-terra cloud escalation)
+genie ask --backend hybrid --model qwen2.5-coder:7b --prompt "Audit recent git diff and run pytest"
 
 # Inspect compiled LangGraph StateGraph Mermaid diagram, specialists, and skills
 genie graph
@@ -88,6 +94,8 @@ genie serve --backend local-llm --model qwen2.5-coder:7b --host 0.0.0.0 --port 8
 ```
 
 ### Optional Environment Variables (`.env`)
+- `OPENAI_BASE_URL` / `OPENAI_KEY` (or `OPENAI_API_KEY`): Configures `--backend api-llm` and `--backend hybrid` (defaults to `gpt-6-luna` on `t1/t2` and `gpt-6.1-terra` on `t3`, overridable via `GENIE_FAST_MODEL` / `GENIE_ACCURATE_MODEL`).
+- `GOOGLE_AI_STUDIO_KEY` (or `GEMINI_API_KEY`): Activates batched `gemini-embedding-2` semantic embeddings in `HybridKnowledgeStore` (falls back to deterministic local hash embeddings offline).
 - `OPENROUTER_API_KEY` / `JEV_MODEL`: Enables live TypeSafe Jev System-One `/api/alpha/decisions` triage (automatically falls back to local calibrated scorer when unset).
 - `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST`: Exports OpenTelemetry traces and quantization telemetry scores to Langfuse Cloud or self-hosted Langfuse (`GET /api/v1/traces` always exposes the local trace buffer).
 

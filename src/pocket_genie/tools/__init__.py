@@ -40,7 +40,16 @@ def register_all_builtin_tools(
     skills = skill_registry or SkillRegistry()
     kb = kb_store or HybridKnowledgeStore()
     if kb.num_chunks == 0 and workspace_dir.exists():
-        kb.index_directory(workspace_dir, max_files=40)
+        if kb.embedder_name.startswith("hash-"):
+            kb.index_directory(workspace_dir, max_files=40)
+        else:
+            kb.index_directory(
+                workspace_dir,
+                glob_patterns=("*.md", "*.py", "*.yaml"),
+                max_files=35,
+                chunk_chars=3200,
+                overlap_chars=200,
+            )
 
     register_devops_tools(registry, workspace_dir)
     sql = register_sql_tools(registry, sql_store, workspace_dir=workspace_dir)

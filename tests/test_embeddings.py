@@ -131,3 +131,31 @@ def test_hybrid_store_semantic_retrieval_with_mocked_gemini():
     assert hits[0].dense_score > hits[1].dense_score
 
 
+def test_gemini_disk_cache_avoids_duplicate_api_calls(tmp_path):
+    calls: list[str] = []
+
+    def mock_transport(url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        calls.append(url)
+        if ":embedContent" in url:
+            return {"embedding": {"values": [3.0, 4.0]}}
+        reqs = payload.get("requests", [])
+        return {"embeddings": [{"values": [1.0, 0.0]} for _ in reqs]}
+
+    cache_db = tmp_path / "emb_cache.db"
+    p1 = GeminiEmbeddingProvider(
+        api_key="key1", model="gemini-embedding-2", transport=mock_transport, cache_path=cache_db
+    )
+    vecs1 = p1.embed_documents(["alpha", "beta", "alpha"])
+    assert len(vecs1) == 3
+    assert len(calls) == 1  # deduplicated "alpha" + "beta" in a single batch call
+
+    # Second provider pointing to the same SQLite cache makes 0 network calls for cached texts
+    p2 = GeminiEmbeddingProvider(
+        api_key="key1", model="gemini-embedding-2", transport=mock_transport, cache_path=cache_db
+    )
+    vecs2 = p2.embed_documents(["beta", "alpha"])
+    assert vecs2 == [vecs1[1], vecs1[0]]
+    assert len(calls) == 1
+    assert p2.embed_query("alpha") == vecs1[0]
+    assert len(calls) == 1
+

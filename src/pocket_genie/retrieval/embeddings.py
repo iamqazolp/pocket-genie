@@ -177,7 +177,7 @@ class GeminiEmbeddingProvider:
         self.timeout = timeout
         self._transport = transport
         self._fallback = HashEmbeddingProvider()
-        self._cache = None
+        self._cache = _default_cache(cache_path, transport)
 
     @property
     def name(self) -> str:
@@ -211,7 +211,7 @@ class GeminiEmbeddingProvider:
         except Exception:
             return self._fallback.embed_query(text)
 
-    def embed_documents(self, texts: list[str], batch_size: int = 50) -> list[list[float]]:
+    def embed_documents(self, texts: list[str], batch_size: int = 100) -> list[list[float]]:
         if not texts:
             return []
         hashes = [_text_sha256(t) for t in texts]
@@ -282,7 +282,7 @@ class OpenAIEmbeddingProvider:
         self.timeout = timeout
         self._transport = transport
         self._fallback = HashEmbeddingProvider()
-        self._cache = None
+        self._cache = _default_cache(cache_path, transport)
 
     @property
     def name(self) -> str:
