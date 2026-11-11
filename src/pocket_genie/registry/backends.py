@@ -373,8 +373,9 @@ class OpenAICompatibleBackend:
             "messages": out_messages,
             "temperature": 0.0,
         }
-        payload["logprobs"] = True
-        payload["top_logprobs"] = 5
+        if self.request_logprobs:
+            payload["logprobs"] = True
+            payload["top_logprobs"] = 5
         if wire_tools:
             payload["tools"] = wire_tools
         if enforce_tool_json:
@@ -526,6 +527,7 @@ class BackendRegistry:
             tier="t1",
             timeout=25.0,
             backup_model=cfg.accurate_model,
+            request_logprobs=False,
         )
         self._backends["t2"] = OpenAICompatibleBackend(
             base_url=cfg.base_url,
@@ -534,6 +536,7 @@ class BackendRegistry:
             tier="t2",
             timeout=25.0,
             backup_model=cfg.accurate_model,
+            request_logprobs=False,
         )
         self._backends["t3"] = OpenAICompatibleBackend(
             base_url=cfg.base_url,
@@ -542,6 +545,7 @@ class BackendRegistry:
             tier="t3",
             timeout=35.0,
             backup_model=cfg.fast_model,
+            request_logprobs=False,
         )
         return cfg
 
@@ -575,6 +579,7 @@ class BackendRegistry:
             tier="t3",
             timeout=35.0,
             backup_model=cfg.fast_model,
+            request_logprobs=False,
         )
         return cfg
 

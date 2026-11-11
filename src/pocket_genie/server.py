@@ -196,6 +196,20 @@ class PocketGenieService:
                     fallback_model=self.fallback_model,
                 )
                 return
+            if self.backend_mode == "api-llm":
+                self.factory.backends.configure_api_llm(
+                    base_url=getattr(self, "_api_base_url", None),
+                    fast_model=self.primary_model,
+                    accurate_model=self.fallback_model,
+                )
+                return
+            if self.backend_mode == "hybrid":
+                self.factory.backends.configure_hybrid(
+                    local_base_url=self.llm_base_url,
+                    local_model=self.primary_model,
+                    cloud_model=self.fallback_model,
+                )
+                return
             if self.backend_mode == "hf-quant":
                 if self.factory.backends.hf_runtime is None:
                     runtime = self.factory.backends.configure_hf_quant(model_id=self.primary_model)

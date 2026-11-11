@@ -218,3 +218,62 @@ def test_registry_configure_api_llm_and_hybrid():
     assert ht3.api_key == "sk-hybrid-test"
 
 
+def test_service_api_llm_preserves_backend_on_run_turn(tmp_path: Path, monkeypatch):
+    from pocket_genie.server import PocketGenieService
+
+    monkeypatch.setenv("OPENAI_KEY", "sk-mock")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+    svc = PocketGenieService(workspace_dir=tmp_path, backend_mode="api-llm")
+    assert svc.primary_model == "gpt-6-luna"
+    assert svc.fallback_model == "gpt-6.1-terra"
+
+    def fake_post(url, payload, api_key, timeout):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": f"Live reply from {payload['model']}",
+                    }
+                }
+            ],
+            "usage": {"completion_tokens": 6},
+        }
+
+    with patch("pocket_genie.registry.backends._post_json", side_effect=fake_post):
+        out_t1 = svc.run_turn("ping", tier="t1")
+        out_t3 = svc.run_turn("deep check", tier="t3")
+
+    assert isinstance(svc.factory.backends.get("t1"), OpenAICompatibleBackend)
+    assert isinstance(svc.factory.backends.get("t3"), OpenAICompatibleBackend)
+    assert "gpt-6-luna" in out_t1["reply"]
+    assert "gpt-6.1-terra" in out_t3["reply"]
+
+
+def test_backup_model_failover_on_503_or_timeout():
+    backend = OpenAICompatibleBackend(
+        base_url="https://api.openai.com/v1",
+        model="gpt-6.1-terra",
+        api_key="sk-test",
+        tier="t3",
+        backup_model="gpt-6-luna",
+    )
+    models_called: list[str] = []
+
+    def mock_post(url, payload, api_key, timeout):
+        models_called.append(payload["model"])
+        if payload["model"] == "gpt-6.1-terra":
+            raise TimeoutError("upstream terra pool busy")
+        return {
+            "choices": [{"message": {"role": "assistant", "content": "Backup luna succeeded"}}],
+            "usage": {"completion_tokens": 4},
+        }
+
+    with patch("pocket_genie.registry.backends._post_json", side_effect=mock_post):
+        res = backend.generate([ChatMessage(role="user", content="check")])
+
+    assert models_called == ["gpt-6.1-terra", "gpt-6-luna"]
+    assert res.message.content == "Backup luna succeeded"
+
+
