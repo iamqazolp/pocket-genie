@@ -11,9 +11,9 @@ from pocket_genie.tools.databricks_tools import (
     DatabricksWorkspaceClient,
     register_databricks_tools,
 )
+from pocket_genie.tools.decision_tools import register_decision_tools
 from pocket_genie.tools.device_termux import register_device_tools
 from pocket_genie.tools.devops import register_devops_tools
-from pocket_genie.tools.jev_tools import register_jev_tools
 from pocket_genie.tools.memory_tools import register_memory_and_kb_tools
 from pocket_genie.tools.personal_hub import PersonalHubStore, register_personal_tools
 from pocket_genie.tools.research_study import (
@@ -56,9 +56,9 @@ def register_all_builtin_tools(
     dev_state = register_device_tools(registry)
     register_visualization_tools(registry)
     register_memory_and_kb_tools(registry, mem, skills, kb)
-    jev_client = register_jev_tools(registry)
+    decision_client = register_decision_tools(registry)
     personal = register_personal_tools(
-        registry, workspace_dir, store=personal_store, jev_client=jev_client
+        registry, workspace_dir, store=personal_store, decision_client=decision_client
     )
     register_work_coding_tools(registry, workspace_dir)
     dbx = register_databricks_tools(registry, client=databricks_client)
@@ -67,7 +67,7 @@ def register_all_builtin_tools(
         workspace_dir,
         kb_store=kb,
         study_store=study_store,
-        jev_client=jev_client,
+        decision_client=decision_client,
     )
     return {
         "memory_store": mem,
@@ -75,7 +75,7 @@ def register_all_builtin_tools(
         "kb_store": kb,
         "sql_store": sql,
         "device_state": dev_state,
-        "jev_client": jev_client,
+        "decision_client": decision_client,
         "personal_store": personal,
         "databricks_client": dbx,
         "study_store": study,
@@ -91,7 +91,7 @@ __all__ = [
     "register_databricks_tools",
     "register_device_tools",
     "register_devops_tools",
-    "register_jev_tools",
+    "register_decision_tools",
     "register_memory_and_kb_tools",
     "register_personal_tools",
     "register_research_and_study_tools",

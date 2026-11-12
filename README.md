@@ -1,6 +1,6 @@
 # pocket-genie
 
-**Quantization-aware multi-agent runtime built on `LangGraph`, `LangChain`, `Langfuse`, and `TypeSafe Jev` System-One triage—combining selective `W4A{8,16}` mixed-precision execution, cached FSM JSON-schema decoding, BOS-sink `INT4` KV compression, and a mobile Human-in-the-Loop command deck.**
+**Quantization-aware multi-agent runtime built on `LangGraph`, `LangChain`, `Langfuse`, and `Gemini Decision` System-One triage—combining selective `W4A{8,16}` mixed-precision execution, cached FSM JSON-schema decoding, BOS-sink `INT4` KV compression, and a mobile Human-in-the-Loop command deck.**
 
 `pocket-genie` pairs a **System-One + System-Two Multi-Agent `StateGraph`** with an **Edge PyTorch / Local-LLM Quantization Runtime**. It runs with full PyTorch MPS/CUDA quantization hooks, LangGraph checkpointing, and OpenTelemetry Langfuse tracing on macOS/Linux, while gracefully degrading to a zero-native-dependency mode on Android Termux (`aarch64`).
 
@@ -18,14 +18,14 @@ Evaluated via `genie eval` ([`docs/BENCHMARKS.md`](docs/BENCHMARKS.md), [`benchm
 | `P_accurate_W4A16_FSM` (`t3`) | In-Place `W4A16` + FSM | `16.00` | `100.0%` | `60.0%` | `16.71 MB` (`~70%`) |
 
 - **Empirical Kurtosis Calibration (`quant/hf_backend.py`):** Live forward calibration on `Qwen2.5-0.5B-Instruct` identifies extreme SwiGLU activation spikes in `mlp.down_proj` (`Layer 2` $\kappa = 89,759.9$, `Layer 21` $\kappa = 65,319.2$), promoting only top outlier layers (`8.57` avg act bits) + Boundary-C SmoothQuant scale migration.
-- **TypeSafe Jev System-One Triage (`integrations/jev_router.py`):** Parallel `LangGraph` node querying OpenRouter's `/api/alpha/decisions` endpoint (`noul` prompt-injection & mutating-intent predicates, `choice` fast-path specialist routing, and `score` precision-tier pre-escalation) before invoking System-Two LLMs.
-- **Compiled `LangGraph` `StateGraph` & Bounded ReAct Delegation (`core/`):** 4-node parallel fan-out (`user_messages_summary`, `recent_conversations`, `load_user_memories`, `jev_system_one_triage`) $\rightarrow$ conditional routing $\rightarrow$ bounded multi-step ReAct specialists (`devops`, `sql`, `kb`, `device`, `red-agent`, and auto-wrapped `MCP` servers) with `InMemorySaver` checkpointing.
+- **Gemini Decision System-One Triage (`integrations/decision_router.py`):** Parallel `LangGraph` node querying Google's `POST /v1beta/decisions` endpoint with **`gemini-decision-1`** (`noul` prompt-injection & mutating-intent predicates, `choice` fast-path specialist routing, and `score` precision-tier pre-escalation) before invoking System-Two LLMs.
+- **Compiled `LangGraph` `StateGraph` & Bounded ReAct Delegation (`core/`):** 4-node parallel fan-out (`user_messages_summary`, `recent_conversations`, `load_user_memories`, `decision_system_one_triage`) $\rightarrow$ conditional routing $\rightarrow$ bounded multi-step ReAct specialists (`devops`, `sql`, `kb`, `device`, `red-agent`, and auto-wrapped `MCP` servers) with `InMemorySaver` checkpointing.
 - **`LangChain` & `Langfuse` OpenTelemetry Observability (`integrations/`, `observability/`):** Lossless `BaseChatModel` (`PocketGenieChatModel`) and Pydantic-synthesized `StructuredTool` adapters, plus `GenieLangfuseTracer` & `LangfuseTracingMiddleware` exporting `agent`, `generation`, `tool`, and `guardrail` OTel spans with live quantization scores (`effective_act_bits`, `promoted_token_ratio`, `kv_memory_saved_mb`).
 - **10-Stage Guardrail Pipeline & Mobile HITL Console (`middlewares/`, `server.py`, `clients/flutter/`):** Orphaned-tool message sanitization, prefix-cache-safe prompts, rolling `RunningSummary` compaction, SQL CTE allowlisting, repeat-call loop breaking, `t1 -> t2 -> t3` fallback escalation, and Web/Flutter Human-in-the-Loop approval cards with post-approval LLM synthesis.
 - **47 Built-In Daily-Driver Tools Across 9 Specialists (`tools/`):**
-  - **Personal Hub (`personal_agent`):** SQLite deadlines with live countdowns, daily schedule + macOS Calendar/Reminders bridge, and Jev-scored message triage (`urgency`, `tone`, `priority_score`) with reply drafting.
+  - **Personal Hub (`personal_agent`):** SQLite deadlines with live countdowns, daily schedule + macOS Calendar/Reminders bridge, and Gemini-scored message triage (`urgency`, `tone`, `priority_score`) with reply drafting.
   - **Work Connectors (`work_ops_agent`, `devops_agent`):** GitHub PRs/issues/Actions CI + HITL branch/commit ops, read-only **Databricks** Jobs/Clusters/Unity Catalog SQL (`~/.databrickscfg` + env vars), and **Google Antigravity** (`brain`/`.local-notes`) + **Claude Code** (`CLAUDE.md`/`.claude`/JSONL session) inspectors.
-  - **Research & Active-Recall Study (`research_study_agent`):** arXiv preprint search, SSRF-safe URL-to-Markdown ingestion into `HybridKnowledgeStore`, SuperMemo **SM-2** spaced-repetition flashcards, and Jev-graded active-recall quizzes.
+  - **Research & Active-Recall Study (`research_study_agent`):** arXiv preprint search, SSRF-safe URL-to-Markdown ingestion into `HybridKnowledgeStore`, SuperMemo **SM-2** spaced-repetition flashcards, and Gemini-graded active-recall quizzes.
 
 ---
 
@@ -95,8 +95,7 @@ genie serve --backend local-llm --model qwen2.5-coder:7b --host 0.0.0.0 --port 8
 
 ### Optional Environment Variables (`.env`)
 - `OPENAI_BASE_URL` / `OPENAI_KEY` (or `OPENAI_API_KEY`): Configures `--backend api-llm` and `--backend hybrid` (defaults to `gpt-6-luna` on `t1/t2` and `gpt-6.1-terra` on `t3`, overridable via `GENIE_FAST_MODEL` / `GENIE_ACCURATE_MODEL`).
-- `GOOGLE_AI_STUDIO_KEY` (or `GEMINI_API_KEY`): Activates batched `gemini-embedding-2` semantic embeddings in `HybridKnowledgeStore` (falls back to deterministic local hash embeddings offline).
-- `OPENROUTER_API_KEY` / `JEV_MODEL`: Enables live TypeSafe Jev System-One `/api/alpha/decisions` triage (automatically falls back to local calibrated scorer when unset).
+- `GOOGLE_AI_STUDIO_KEY` (or `GEMINI_API_KEY`): Activates live **`gemini-decision-1`** System-One `/v1beta/decisions` triage (override model via `GENIE_DECISION_MODEL`) and batched **`gemini-embedding-2`** semantic embeddings in `HybridKnowledgeStore` (both fall back locally when unset).
 - `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST`: Exports OpenTelemetry traces and quantization telemetry scores to Langfuse Cloud or self-hosted Langfuse (`GET /api/v1/traces` always exposes the local trace buffer).
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for full architecture diagrams and ablation details.

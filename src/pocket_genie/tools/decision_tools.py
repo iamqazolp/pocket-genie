@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pocket_genie.integrations.jev_router import JevDecisionClient
+from pocket_genie.integrations.decision_router import GeminiDecisionClient
 from pocket_genie.registry.tools import ToolRegistry
 
 
 def build_patch_audit_questions() -> dict[str, dict[str, Any]]:
-    """Construct the 3-question Jev Decisions rubric for automated code/diff review."""
+    """Construct the 3-question Gemini Decision Decisions rubric for automated code/diff review."""
     return {
         "breaking_risk": {
             "type": "noul",
@@ -35,17 +35,17 @@ def build_patch_audit_questions() -> dict[str, dict[str, Any]]:
     }
 
 
-def register_jev_tools(
+def register_decision_tools(
     registry: ToolRegistry,
-    client: JevDecisionClient | None = None,
-) -> JevDecisionClient:
-    """Register TypeSafe Jev System-One decision and patch-auditing tools."""
-    jev_client = client or JevDecisionClient()
+    client: GeminiDecisionClient | None = None,
+) -> GeminiDecisionClient:
+    """Register Gemini Decision System-One decision and patch-auditing tools."""
+    decision_client = client or GeminiDecisionClient()
 
     @registry.register(
-        name="jev.decide",
+        name="decision.decide",
         description=(
-            "Evaluate arbitrary state text or JSON against structured TypeSafe Jev questions "
+            "Evaluate arbitrary state text or JSON against structured Gemini Decision questions "
             "(noul binary probabilities, choice classification, and score rubrics) in a single pass."
         ),
         parameters={
@@ -65,10 +65,10 @@ def register_jev_tools(
             },
             "required": ["state", "questions_json"],
         },
-        domain="jev",
+        domain="decision",
         mutating=False,
     )
-    def jev_decide(state: str, questions_json: str) -> str:
+    def decision_decide(state: str, questions_json: str) -> str:
         try:
             parsed = json.loads(questions_json)
         except json.JSONDecodeError as exc:
@@ -77,13 +77,13 @@ def register_jev_tools(
         if not isinstance(parsed, dict) or not parsed:
             raise ValueError("questions_json must decode to a non-empty JSON object.")
 
-        result = jev_client.decide(state=state, questions=parsed)
+        result = decision_client.decide(state=state, questions=parsed)
         return json.dumps(result, indent=2)
 
     @registry.register(
-        name="jev.audit_patch",
+        name="decision.audit_patch",
         description=(
-            "Audit a git diff or code snippet with TypeSafe Jev across breaking_risk (noul), "
+            "Audit a git diff or code snippet with Gemini Decision across breaking_risk (noul), "
             "security_hazard (noul), and patch_quality (score) before applying a patch."
         ),
         parameters={
@@ -100,14 +100,14 @@ def register_jev_tools(
             },
             "required": ["diff_or_code"],
         },
-        domain="jev",
+        domain="decision",
         mutating=False,
     )
-    def jev_audit_patch(diff_or_code: str, context: str = "") -> str:
+    def decision_audit_patch(diff_or_code: str, context: str = "") -> str:
         eval_state: dict[str, str] | str = (
             {"context": context, "diff_or_code": diff_or_code} if context else diff_or_code
         )
-        decision = jev_client.decide(
+        decision = decision_client.decide(
             state=eval_state,
             questions=build_patch_audit_questions(),
         )
@@ -137,4 +137,4 @@ def register_jev_tools(
         }
         return json.dumps(report, indent=2)
 
-    return jev_client
+    return decision_client

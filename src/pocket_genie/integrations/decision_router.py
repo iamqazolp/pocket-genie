@@ -8,10 +8,11 @@ import time
 import urllib.request
 from typing import Any, Callable
 
+from pocket_genie.env_config import get_ssl_context
 from pocket_genie.shared import PrecisionTier
 
-OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
-DEFAULT_JEV_MODEL = "typesafe/jev-latest"
+GEMINI_DECISIONS_URL = "https://generativelanguage.googleapis.com/v1beta/decisions"
+DEFAULT_DECISION_MODEL = "gemini-decision-1"
 
 _INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"ignore\s+(all\s+)?(previous|prior|system)\s+instructions", re.IGNORECASE),
@@ -100,11 +101,11 @@ _SPECIALIST_HINTS: dict[str, tuple[str, ...]] = {
 
 
 @dataclasses.dataclass(slots=True)
-class JevTriageDecision:
-    """Structured System-One triage output from TypeSafe Jev (OpenRouter Decisions API)."""
+class TriageDecision:
+    """Structured System-One triage output from Gemini Decision (Gemini Decisions API)."""
 
     model: str
-    source: str  # "openrouter" | "local_calibrated"
+    source: str  # "gemini" | "local_calibrated"
     injection_prob: float
     mutating_prob: float
     specialist: str
@@ -127,8 +128,8 @@ class JevTriageDecision:
         return d
 
 
-def build_jev_triage_questions() -> dict[str, dict[str, Any]]:
-    """Construct the 4-question typed Jev Decisions payload (2x noul, 1x choice, 1x score)."""
+def build_triage_questions() -> dict[str, dict[str, Any]]:
+    """Construct the 4-question typed Gemini Decisions payload (2x noul, 1x choice, 1x score)."""
     return {
         "prompt_injection": {
             "type": "noul",
@@ -146,6 +147,7 @@ def build_jev_triage_questions() -> dict[str, dict[str, Any]]:
         },
         "route_specialist": {
             "type": "choice",
+            "instructions": "Which specialist agent should handle this user message?",
             "criteria": {
                 "devops_agent": "Git repository status, diffs, reading source files, running pytest suites, or code patches.",
                 "sql_agent": "SQL SELECT analytics, table schemas, quantization ablation tables, or chart metrics.",
@@ -159,6 +161,7 @@ def build_jev_triage_questions() -> dict[str, dict[str, Any]]:
         },
         "precision_tier": {
             "type": "score",
+            "instructions": "Rate the complexity and required model precision tier of this user request.",
             "criteria": [
                 "Simple single-tool lookup or status check suitable for fast W4A8 execution (t1).",
                 "Structured SQL filtering, multi-argument schema call, or technical synthesis needing P_mixed + FSM (t2).",
@@ -185,32 +188,63 @@ def _extract_noul(ans: dict[str, Any]) -> float:
     return 0.0
 
 
-def _extract_score(ans: dict[str, Any]) -> float:
+def _extract_score(ans: dict[str, Any], levels: int = 3) -> float:
+    """Normalize the expected rubric score (0 .. levels-1) into the 0..1 range."""
     if "score" in ans and ans["score"] is not None:
-        val = float(ans["score"])
-        return val / 2.0 if val > 1.0 else max(0.0, min(1.0, val))
+        top = float(max(1, levels - 1))
+        return max(0.0, min(1.0, float(ans["score"]) / top))
     return 0.0
 
 
-class JevDecisionClient:
-    """System-One TypeSafe Jev client over OpenRouter's `/api/alpha/decisions` endpoint with calibrated offline fallback."""
+def _with_default_instructions(questions: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Gemini Decisions requires `instructions` on every question; synthesize them when omitted."""
+    defaults = {
+        "noul": "Does the statement described by this question hold for the input?",
+        "choice": "Which option best matches the input?",
+        "score": "Rate the input against the ordered rubric levels.",
+    }
+    out: dict[str, dict[str, Any]] = {}
+    for q_id, spec in questions.items():
+        q = dict(spec)
+        if not q.get("instructions"):
+            q["instructions"] = defaults.get(str(q.get("type")), "Evaluate the input.")
+        out[q_id] = q
+    return out
+
+
+def _request_headers(key: str | None) -> dict[str, str]:
+    return {"Content-Type": "application/json", "x-goog-api-key": key or "test-key"}
+
+
+def _usage_tokens(usage: dict[str, Any]) -> tuple[int, int]:
+    in_toks = int(usage.get("total_input_tokens") or usage.get("input_tokens") or 0)
+    out_toks = int(usage.get("total_output_tokens") or usage.get("output_tokens") or 0)
+    return in_toks, out_toks
+
+
+class GeminiDecisionClient:
+    """System-One Gemini Decision client over the Gemini API `POST /v1beta/decisions` endpoint (`gemini-decision-1`) with calibrated offline fallback."""
 
     def __init__(
         self,
         model: str | None = None,
         api_key: str | None = None,
-        endpoint: str = OPENROUTER_DECISIONS_URL,
+        endpoint: str = GEMINI_DECISIONS_URL,
         timeout: float = 8.0,
         transport: Callable[[str, dict[str, Any], dict[str, str], float], dict[str, Any]] | None = None,
     ) -> None:
-        self.model = model or os.environ.get("JEV_MODEL", DEFAULT_JEV_MODEL)
+        self.model = model or os.environ.get("GENIE_DECISION_MODEL", DEFAULT_DECISION_MODEL)
         self._api_key = api_key
         self.endpoint = endpoint
         self.timeout = timeout
         self._transport = transport
 
     def _resolve_api_key(self) -> str | None:
-        return self._api_key or os.environ.get("OPENROUTER_API_KEY")
+        if self._api_key:
+            return self._api_key
+        if "PYTEST_CURRENT_TEST" in os.environ and self._transport is None:
+            return None
+        return os.environ.get("GOOGLE_AI_STUDIO_KEY") or os.environ.get("GEMINI_API_KEY")
 
     def _default_post(
         self,
@@ -225,10 +259,10 @@ class JevDecisionClient:
             headers=headers,
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=get_ssl_context()) as resp:
             return dict(json.loads(resp.read().decode("utf-8")))
 
-    def _local_calibrated_fallback(self, prompt: str, t0: float) -> JevTriageDecision:
+    def _local_calibrated_fallback(self, prompt: str, t0: float) -> TriageDecision:
         text = prompt.strip()
         lower = text.lower()
 
@@ -262,7 +296,7 @@ class JevDecisionClient:
         else:
             c_score = 0.18
 
-        return JevTriageDecision(
+        return TriageDecision(
             model=f"{self.model}:offline",
             source="local_calibrated",
             injection_prob=round(inj_prob, 4),
@@ -275,8 +309,8 @@ class JevDecisionClient:
             latency_ms=round((time.perf_counter() - t0) * 1000.0, 2),
         )
 
-    def evaluate_turn(self, prompt: str) -> JevTriageDecision:
-        """Evaluate user prompt in a single System-One Jev Decisions call (falls back locally when offline)."""
+    def evaluate_turn(self, prompt: str) -> TriageDecision:
+        """Evaluate user prompt in a single System-One Gemini Decision Decisions call (falls back locally when offline)."""
         t0 = time.perf_counter()
         key = self._resolve_api_key()
         if not key and self._transport is None:
@@ -284,13 +318,10 @@ class JevDecisionClient:
 
         payload: dict[str, Any] = {
             "model": self.model,
-            "state": prompt,
-            "questions": build_jev_triage_questions(),
+            "input": prompt,
+            "questions": _with_default_instructions(build_triage_questions()),
         }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key or 'sk-or-test'}",
-        }
+        headers = _request_headers(key)
 
         try:
             post_fn = self._transport or self._default_post
@@ -307,16 +338,16 @@ class JevDecisionClient:
         specialist = str(route_ans.get("choice") or "supervisor")
         conf = float(route_ans.get("confidence") or ( max(probs.values()) if probs else 0.5 ))
 
-        c_score = _extract_score(answers.get("precision_tier") or {})
+        tier_levels = len(build_triage_questions()["precision_tier"]["criteria"])
+        c_score = _extract_score(answers.get("precision_tier") or {}, levels=tier_levels)
         usage = body.get("usage") or {}
-        in_toks = int(usage.get("input_tokens") or 0)
-        out_toks = int(usage.get("output_tokens") or 0)
+        in_toks, out_toks = _usage_tokens(usage)
         raw_cost = usage.get("cost")
-        cost_usd = float(raw_cost) if raw_cost is not None else round(in_toks * 0.042 / 1_000_000.0, 8)
+        cost_usd = float(raw_cost) if raw_cost is not None else 0.0
 
-        return JevTriageDecision(
+        return TriageDecision(
             model=str(body.get("model") or self.model),
-            source="openrouter",
+            source="gemini",
             injection_prob=round(inj_prob, 4),
             mutating_prob=round(mut_prob, 4),
             specialist=specialist,
@@ -479,7 +510,7 @@ class JevDecisionClient:
         }
 
     def decide(self, state: Any, questions: dict[str, dict[str, Any]]) -> dict[str, Any]:
-        """Execute a general-purpose System-One Jev Decisions query across noul, choice, and score questions."""
+        """Execute a general-purpose System-One Gemini Decision Decisions query across noul, choice, and score questions."""
         self._validate_questions(questions)
         t0 = time.perf_counter()
         key = self._resolve_api_key()
@@ -488,13 +519,10 @@ class JevDecisionClient:
 
         payload: dict[str, Any] = {
             "model": self.model,
-            "state": state,
-            "questions": questions,
+            "input": json.dumps(state, ensure_ascii=False) if isinstance(state, (dict, list)) else str(state),
+            "questions": _with_default_instructions(questions),
         }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key or 'sk-or-test'}",
-        }
+        headers = _request_headers(key)
 
         try:
             post_fn = self._transport or self._default_post
@@ -523,13 +551,15 @@ class JevDecisionClient:
                 ans["confidence"] = conf
                 ans["probabilities"] = probs
             elif q_type == "score":
-                ans["score"] = round(_extract_score(ans), 4)
+                ans["score"] = round(_extract_score(ans, levels=len(q_spec.get("criteria") or []) or 3), 4)
             normalized_answers[q_id] = ans
 
         usage = dict(body.get("usage") or {})
+        usage["input_tokens"], usage["output_tokens"] = _usage_tokens(usage)
+        usage.setdefault("cost", 0.0)
         return {
             "model": str(body.get("model") or self.model),
-            "source": "openrouter",
+            "source": "gemini",
             "answers": normalized_answers,
             "latency_ms": round((time.perf_counter() - t0) * 1000.0, 2),
             "usage": usage,

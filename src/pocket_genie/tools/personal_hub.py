@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from pocket_genie.integrations.jev_router import JevDecisionClient
+from pocket_genie.integrations.decision_router import GeminiDecisionClient
 from pocket_genie.registry.tools import ToolRegistry
 
 
@@ -132,12 +132,12 @@ def register_personal_tools(
     registry: ToolRegistry,
     workspace_dir: Path,
     store: PersonalHubStore | None = None,
-    jev_client: JevDecisionClient | None = None,
+    decision_client: GeminiDecisionClient | None = None,
 ) -> PersonalHubStore:
     if store is None:
         db = ":memory:" if "PYTEST_CURRENT_TEST" in os.environ else str(workspace_dir / ".genie_personal.db")
         store = PersonalHubStore(db_path=db)
-    jev = jev_client or JevDecisionClient()
+    decider = decision_client or GeminiDecisionClient()
 
     @registry.register(
         name="personal.add_deadline", description="Add a task or deadline with ISO timestamp.",
@@ -212,7 +212,7 @@ def register_personal_tools(
             },
         }
         try:
-            ans = jev.decide(state=f"Sender: {sender}\nBody: {body}", questions=qs).get("answers", {})
+            ans = decider.decide(state=f"Sender: {sender}\nBody: {body}", questions=qs).get("answers", {})
             raw_urg = ans.get("urgency", 0.5)
             urgency = float(raw_urg.get("noul", 0.5) if isinstance(raw_urg, dict) else raw_urg)
             raw_tone = ans.get("tone", "concise_direct")

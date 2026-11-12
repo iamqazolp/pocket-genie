@@ -10,24 +10,24 @@ Each incoming request executes through a compiled **`langgraph.graph.StateGraph`
 1. **`user_messages_summary`**: Incrementally updates the rolling summary of user queries across the active session.
 2. **`recent_conversations`**: Retrieves and caches the 3 most recent session summaries for the active workspace.
 3. **`load_user_memories`**: Loads pinned user preferences and workspace facts from `SessionMemoryStore`.
-4. **`jev_system_one_triage`**: Queries **TypeSafe Jev** (`POST https://openrouter.ai/api/alpha/decisions` with calibrated offline fallback) in a single batched System-One call (`prompt_injection` `noul`, `mutating_intent` `noul`, `route_specialist` `choice`, and `precision_tier` `score`) to short-circuit prompt injections, pre-escalate precision tiers (`t1 -> t2/t3`), and bypass Supervisor prefill on high-confidence single-domain queries.
+4. **`decision_system_one_triage`**: Queries **`gemini-decision-1`** (`POST https://generativelanguage.googleapis.com/v1beta/decisions` with calibrated offline fallback) in a single batched System-One call (`prompt_injection` `noul`, `mutating_intent` `noul`, `route_specialist` `choice`, and `precision_tier` `score`) to short-circuit prompt injections, pre-escalate precision tiers (`t1 -> t2/t3`), and bypass Supervisor prefill on high-confidence single-domain queries.
 
 ```mermaid
 flowchart TD
     START([User Query]) --> PreSummary[user_messages_summary\nSession query summary]
     START --> PreRecents[recent_conversations\nLast 3 session summaries]
     START --> PreMemory[load_user_memories\nPinned user preferences & facts]
-    START --> PreJev[jev_system_one_triage\nTypeSafe Jev Decisions: noul / choice / score]
+    START --> PreDecision[decision_system_one_triage\ngemini-decision-1: noul / choice / score]
 
     PreSummary --> Dispatch[route_dispatch\nConditional StateGraph Barrier]
     PreRecents --> Dispatch
     PreMemory --> Dispatch
-    PreJev --> Dispatch
+    PreDecision --> Dispatch
 
     subgraph CoreEngine [Multi-Route Bounded ReAct Engine]
-        Dispatch -->|injection >= 0.80| JevBlock[jev_guardrail_block_node\nZero-LLM System-One Halt]
+        Dispatch -->|injection >= 0.80| DecisionBlock[decision_guardrail_block_node\nZero-LLM System-One Halt]
         Dispatch -->|supervisor / scoped-demo / run-assistant| SupNode[supervisor_node\nBounded ReAct Loop + Tiered t1->t2->t3]
-        Dispatch -->|direct-specialist / Jev fast-path| DirectNode[direct_specialist_node\nIsolated Domain ReAct Subgraph]
+        Dispatch -->|direct-specialist / Gemini Decision fast-path| DirectNode[direct_specialist_node\nIsolated Domain ReAct Subgraph]
         Dispatch -->|red-agent| RedNode[red_agent_node\nAdversarial Quant & Schema Probe]
 
         SupNode --> DelegatedTools[Agent-as-Tool Delegation\ncreate_task_<specialist>_t<tier>]
@@ -40,7 +40,7 @@ flowchart TD
     DelegatedTools --> Device[Device & Termux Specialist]
     DelegatedTools --> MCP[MCP Server Specialists]
 
-    JevBlock --> History[capture_to_full_history +\nBOS-Sink INT4 KV Compaction]
+    DecisionBlock --> History[capture_to_full_history +\nBOS-Sink INT4 KV Compaction]
     SupNode --> History
     DirectNode --> History
     RedNode --> History

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from pocket_genie.integrations.jev_router import (
-    DEFAULT_JEV_MODEL,
-    OPENROUTER_DECISIONS_URL,
-    JevDecisionClient,
-    JevTriageDecision,
-    build_jev_triage_questions,
+from pocket_genie.integrations.decision_router import (
+    DEFAULT_DECISION_MODEL,
+    GEMINI_DECISIONS_URL,
+    GeminiDecisionClient,
+    TriageDecision,
+    build_triage_questions,
 )
 from pocket_genie.integrations.langchain_bridge import (
     LANGCHAIN_AVAILABLE,
@@ -17,13 +17,13 @@ from pocket_genie.integrations.langchain_bridge import (
 )
 
 __all__ = [
-    "DEFAULT_JEV_MODEL",
-    "JevDecisionClient",
-    "JevTriageDecision",
+    "DEFAULT_DECISION_MODEL",
+    "GeminiDecisionClient",
+    "TriageDecision",
     "LANGCHAIN_AVAILABLE",
-    "OPENROUTER_DECISIONS_URL",
+    "GEMINI_DECISIONS_URL",
     "PocketGenieChatModel",
-    "build_jev_triage_questions",
+    "build_triage_questions",
     "chat_messages_to_langchain",
     "json_schema_to_pydantic_model",
     "langchain_to_chat_messages",

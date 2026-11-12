@@ -14,7 +14,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable
 
-from pocket_genie.integrations.jev_router import JevDecisionClient
+from pocket_genie.integrations.decision_router import GeminiDecisionClient
 from pocket_genie.registry.tools import ToolRegistry
 from pocket_genie.retrieval.hybrid_store import HybridKnowledgeStore
 
@@ -421,12 +421,12 @@ def register_research_and_study_tools(
     workspace_dir: Path,
     kb_store: HybridKnowledgeStore | None = None,
     study_store: StudyDeckStore | None = None,
-    jev_client: JevDecisionClient | None = None,
+    decision_client: GeminiDecisionClient | None = None,
     http_get: Callable[[str], str] | None = None,
 ) -> StudyDeckStore:
     """Register research and active-recall study tools with ToolRegistry."""
     fetcher = http_get or _default_http_get
-    jev = jev_client or JevDecisionClient()
+    decider = decision_client or GeminiDecisionClient()
 
     if study_store is None:
         if "PYTEST_CURRENT_TEST" in os.environ:
@@ -597,7 +597,7 @@ def register_research_and_study_tools(
     @registry.register(
         name="study.grade_answer",
         description=(
-            "Grade a user's active recall response using TypeSafe Jev Decisions and optionally "
+            "Grade a user's active recall response using Gemini Decision Decisions and optionally "
             "advance the flashcard's SM-2 interval."
         ),
         parameters={
@@ -663,7 +663,7 @@ def register_research_and_study_tools(
             },
         }
 
-        decision = jev.decide(state=state, questions=questions)
+        decision = decider.decide(state=state, questions=questions)
         answers = decision.get("answers") or {}
 
         raw_mastery = (answers.get("mastery_score") or {}).get("score", 0.5)

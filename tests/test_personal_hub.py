@@ -72,8 +72,8 @@ def test_personal_hub_store_crud(tmp_path: Path) -> None:
 
 def test_register_personal_tools(tmp_path: Path) -> None:
     registry = ToolRegistry()
-    mock_jev = MagicMock()
-    mock_jev.decide.return_value = {
+    mock_decision = MagicMock()
+    mock_decision.decide.return_value = {
         "answers": {
             "urgency": 0.8,
             "tone": "warm_collaborative",
@@ -84,7 +84,7 @@ def test_register_personal_tools(tmp_path: Path) -> None:
     store = register_personal_tools(
         registry=registry,
         workspace_dir=tmp_path,
-        jev_client=mock_jev,
+        decision_client=mock_decision,
     )
     assert store is not None
 

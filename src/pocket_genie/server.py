@@ -158,7 +158,7 @@ class PocketGenieService:
             "pinned_memories": self.state.pinned_memories,
             "pending_hitl": [h.to_dict() for h in self.state.pending_hitl],
             "middleware_trace": self.state.middleware_trace[-20:],
-            "jev_triage": dict(self.state.jev_triage),
+            "decision_triage": dict(self.state.decision_triage),
             "quant_telemetry": self.state.quant_telemetry.to_dict(),
             "observability": {
                 "langgraph_enabled": LANGGRAPH_AVAILABLE,

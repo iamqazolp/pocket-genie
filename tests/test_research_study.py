@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from pocket_genie.integrations.jev_router import JevDecisionClient
+from pocket_genie.integrations.decision_router import GeminiDecisionClient
 from pocket_genie.registry.tools import ToolRegistry
 from pocket_genie.retrieval.hybrid_store import HybridKnowledgeStore
 from pocket_genie.tools.research_study import (
@@ -173,7 +173,7 @@ def test_sm2_interval_progression_in_study_store() -> None:
     assert r_fail["easiness_factor"] == 1.3
 
 
-def test_jev_answer_grading_and_flashcard_update(tmp_path: Path) -> None:
+def test_decision_answer_grading_and_flashcard_update(tmp_path: Path) -> None:
     registry = ToolRegistry()
     store = StudyDeckStore(":memory:")
     card = store.add_flashcard(
@@ -190,20 +190,20 @@ def test_jev_answer_grading_and_flashcard_update(tmp_path: Path) -> None:
         _timeout: float,
     ) -> dict[str, Any]:
         return {
-            "model": "typesafe/jev-latest",
+            "model": "gemini-decision-1",
             "answers": {
                 "factual_accuracy": {"type": "noul", "noul": 0.94},
                 "missing_key_concept": {"type": "noul", "noul": 0.06},
-                "mastery_score": {"type": "score", "score": 0.90},
+                "mastery_score": {"type": "score", "score": 2.7},  # 4 rubric levels -> 0.90
             },
         }
 
-    jev = JevDecisionClient(api_key="sk-test", transport=fake_transport)
+    decision = GeminiDecisionClient(api_key="sk-test", transport=fake_transport)
     register_research_and_study_tools(
         registry=registry,
         workspace_dir=tmp_path,
         study_store=store,
-        jev_client=jev,
+        decision_client=decision,
     )
 
     grade_tool = registry.get("study.grade_answer")

@@ -22,11 +22,11 @@ SPECIALIST_ROSTER: dict[str, SpecialistConfig] = {
         agent_id="devops_agent",
         display_name="DevOps & Repository Specialist",
         description="Lists files, searches code, inspects git status/diffs/logs, reads chunks, runs pytest, and applies patches.",
-        tool_domains=("devops", "jev"),
+        tool_domains=("devops", "decision"),
         default_tier="t1",
         system_prompt=(
             "You are the DevOps & Repository Specialist. Search code, list files, and inspect git status/diffs/logs "
-            "before proposing minimal patches or running TypeSafe Jev patch audits."
+            "before proposing minimal patches or running Gemini Decision patch audits."
         ),
     ),
     "knowledge_base_agent": SpecialistConfig(
@@ -65,19 +65,19 @@ SPECIALIST_ROSTER: dict[str, SpecialistConfig] = {
     "red_teaming_agent": SpecialistConfig(
         agent_id="red_teaming_agent",
         display_name="Red-Teaming & Quantization Fault Specialist",
-        description="Executes adversarial schema probes, Jev structured decisions, activation outlier stress tests, and fallback verification.",
-        tool_domains=("sql", "kb", "jev"),
+        description="Executes adversarial schema probes, Gemini Decision structured decisions, activation outlier stress tests, and fallback verification.",
+        tool_domains=("sql", "kb", "decision"),
         default_tier="t2",
         system_prompt=(
             "You are the Red-Teaming & Quantization Fault Specialist. Stress-test tool schemas, outlier-sensitive "
-            "layers, TypeSafe Jev structured decisions, and fallback tier transitions."
+            "layers, Gemini Decision structured decisions, and fallback tier transitions."
         ),
     ),
     "run_assistant_agent": SpecialistConfig(
         agent_id="run_assistant_agent",
         display_name="Workflow & Run Assistant",
         description="Monitors quantization runs, GitHub CI pipelines, Antigravity/Claude Code sessions, and Databricks jobs.",
-        tool_domains=("devops", "github", "agent_ops", "databricks", "sql", "device", "jev"),
+        tool_domains=("devops", "github", "agent_ops", "databricks", "sql", "device", "decision"),
         default_tier="t1",
         system_prompt=(
             "You are the Run Assistant. Inspect GitHub PRs/CI, Antigravity and Claude Code sessions, Databricks "
@@ -87,19 +87,19 @@ SPECIALIST_ROSTER: dict[str, SpecialistConfig] = {
     "personal_agent": SpecialistConfig(
         agent_id="personal_agent",
         display_name="Personal Hub & Triage Specialist",
-        description="Manages personal deadlines, countdowns, daily schedule/Calendar bridge, and Jev-scored message replies.",
+        description="Manages personal deadlines, countdowns, daily schedule/Calendar bridge, and Gemini-scored message replies.",
         tool_domains=("personal", "device"),
         default_tier="t1",
         system_prompt=(
             "You are the Personal Hub Specialist. Track deadlines with live countdowns, coordinate daily agendas "
-            "and native reminders, and triage incoming messages with Jev urgency/tone/priority scoring."
+            "and native reminders, and triage incoming messages with Gemini Decision urgency/tone/priority scoring."
         ),
     ),
     "work_ops_agent": SpecialistConfig(
         agent_id="work_ops_agent",
         display_name="GitHub, Databricks & Agent-Ops Specialist",
         description="Operates across GitHub PRs/issues/CI, Databricks Unity Catalog SQL & job runs, Antigravity, and Claude Code.",
-        tool_domains=("github", "databricks", "agent_ops", "devops", "jev"),
+        tool_domains=("github", "databricks", "agent_ops", "devops", "decision"),
         default_tier="t2",
         system_prompt=(
             "You are the Work Ops Specialist. Inspect GitHub PRs/issues/CI, query Databricks jobs/clusters and "
@@ -110,11 +110,11 @@ SPECIALIST_ROSTER: dict[str, SpecialistConfig] = {
         agent_id="research_study_agent",
         display_name="Research & Active-Recall Study Specialist",
         description="Searches arXiv papers, ingests web docs into local RAG, manages SM-2 flashcards, and grades study answers.",
-        tool_domains=("research", "study", "kb", "jev"),
+        tool_domains=("research", "study", "kb", "decision"),
         default_tier="t2",
         system_prompt=(
             "You are the Research & Study Specialist. Search arXiv preprints, fetch and index technical docs into "
-            "the knowledge base, schedule SM-2 flashcards, and grade active-recall answers with TypeSafe Jev."
+            "the knowledge base, schedule SM-2 flashcards, and grade active-recall answers with Gemini Decision."
         ),
     ),
 }
